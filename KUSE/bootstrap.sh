@@ -3,20 +3,42 @@ set -Eeuo pipefail
 
 ###############################################################################
 # bootstrap-k8s-calico-lab-verbose.sh
-# - Runs from ANY admin machine that can SSH to the nodes
-# - Executes everything via SSH on the nodes (no local apt/kubeadm)
-# - Asks for SSH username/password
-# - LAB workaround: neutralizes shim-signed/grub-efi dpkg breakage
-# - Installs Kubernetes v1.32 repo (pkgs.k8s.io), kubeadm/kubelet/kubectl/cri-tools
-# - kubeadm init on kube-1, joins kube-2/kube-3, installs Calico (operator)
+#
+# Purpose:
+#   Bootstrap a 3-node Kubernetes lab cluster over SSH (password auth) with:
+#     - kube-1 (10.0.0.101) as control-plane
+#     - kube-2 (10.0.0.102) worker
+#     - kube-3 (10.0.0.103) worker
+#   Then install Calico via Tigera Operator (VXLAN) using POD_CIDR=192.168.0.0/16
+#
+# Lab findings handled:
+#   1) Some nodes may have dpkg blocked by shim-signed postinst when run non-TTY.
+#      -> We FORCE a TTY for SSH sessions (-tt).
+#      -> We run a dpkg recovery step early (best effort).
+#   2) Old pkgs.k8s.io repos (e.g. v1.28) may exist and cause EXPKEYSIG.
+#      -> We remove old kubernetes list files and key remnants, then re-add v1.32.
+#   3) gpg can fail without /dev/tty when piped.
+#      -> We download key to file, then gpg --dearmor --batch --no-tty.
+#
+# Requirements on the machine you run this script from:
+#   - ssh
+#   - sshpass
+#
+# Assumptions on nodes:
+#   - User exists on all nodes and can sudo (password prompt ok)
+#   - Ubuntu Jammy-like environment with apt
+#   - container runtime is already present OR provided by lab (not installed here)
+#
+# NOTE:
+#   This is a LAB-focused script. It prioritizes progress and verbosity.
 ###############################################################################
 
-# ---- Ask for credentials (no echo for password)
+# ---- Ask for credentials
 read -rp "SSH Username: " USER
 read -rsp "SSH Password: " PASS
 echo
 
-# ---- Node inventory
+# ---- Nodes
 KUBE1_IP="10.0.0.101"
 KUBE2_IP="10.0.0.102"
 KUBE3_IP="10.0.0.103"
@@ -33,15 +55,18 @@ NODES=(
 
 # ---- Cluster config
 POD_CIDR="192.168.0.0/16"
-K8S_REPO_MINOR="v1.32"        # pkgs.k8s.io channel
+K8S_REPO_MINOR="v1.32"
 CALICO_VERSION="v3.30.2"
 
-# ---- Local prerequisites
+# ---- Local prereqs
 for cmd in ssh sshpass; do
   command -v "$cmd" >/dev/null 2>&1 || { echo "ERROR: missing local command: $cmd" >&2; exit 1; }
 done
 
+# ---- SSH settings
+# -tt is CRITICAL for shim-signed/debconf postinst scripts that expect /dev/tty.
 SSH_OPTS=(
+  -tt
   -o StrictHostKeyChecking=no
   -o UserKnownHostsFile=/dev/null
   -o LogLevel=ERROR
@@ -89,10 +114,11 @@ for n in "${NODES[@]}"; do
   ssh_do "$ip" "bash -lc '
 set -Eeuo pipefail
 export DEBIAN_FRONTEND=noninteractive
+
 echo \"Setting hostname -> ${host}\"
 sudo hostnamectl set-hostname \"${host}\"
 
-echo \"Appending /etc/hosts (idempotency not guaranteed; lab-friendly)\"
+echo \"Appending /etc/hosts (lab-friendly; may duplicate on reruns)\"
 printf \"\n# kubernetes cluster\n%s\n\" \"${HOSTS_BLOCK}\" | sudo tee -a /etc/hosts >/dev/null
 
 echo \"Hostname now:\"
@@ -101,22 +127,19 @@ hostname
 done
 
 ###############################################################################
-# PHASE 2 – Install Kubernetes packages (robust repo + LAB shim fix)
+# PHASE 2 – Prepare dpkg (LAB) + Install Kubernetes packages on all nodes
 ###############################################################################
 echo
 echo "================================================="
-echo "📦 PHASE 2 – Kubernetes install on ALL nodes (LAB-safe, verbose)"
+echo "📦 PHASE 2 – dpkg recovery (LAB) + Kubernetes install on ALL nodes"
 echo "================================================="
 
 REMOTE_INSTALL=$(cat <<EOS
 set -Eeuo pipefail
 export DEBIAN_FRONTEND=noninteractive
 
-echo "== [LAB FIX] Neutralize shim-signed/grub-efi issues (dpkg must not block) =="
-# In your lab, shim-signed postinst can fail (no /dev/disk/by-id). We prevent it from breaking apt.
-sudo apt-mark hold shim-signed grub-efi-amd64 grub-efi-amd64-signed || true
-
-echo "== [LAB FIX] Try to recover dpkg state (ignore failures, continue) =="
+echo "== [LAB] dpkg recovery (best effort) =="
+# If shim-signed is half-configured, dpkg may be stuck. With TTY (-tt) this often succeeds.
 sudo dpkg --configure -a || true
 sudo apt-get -f install -y || true
 
@@ -125,15 +148,15 @@ sudo rm -f /etc/apt/sources.list.d/kubernetes.list
 sudo rm -f /etc/apt/sources.list.d/*kubernetes*.list || true
 sudo rm -f /etc/apt/trusted.gpg.d/*kubernetes* || true
 
-echo "== [B] Base packages =="
-sudo apt-get update || true
+echo "== [B] Base packages (repo tooling) =="
+sudo apt-get update
 sudo apt-get install -y ca-certificates curl gpg apt-transport-https
 
 echo "== [C] Configure Kubernetes repo (${K8S_REPO_MINOR}) =="
 sudo mkdir -p /etc/apt/keyrings
 curl -fsSL https://pkgs.k8s.io/core:/stable:/${K8S_REPO_MINOR}/deb/Release.key -o /tmp/k8s-release.key
 
-# Non-interactive dearmor (no /dev/tty)
+# Non-interactive gpg (no /dev/tty needed)
 sudo gpg --dearmor --batch --yes --no-tty \\
   -o /etc/apt/keyrings/kubernetes-apt-keyring.gpg /tmp/k8s-release.key
 
@@ -142,8 +165,8 @@ sudo chmod 0644 /etc/apt/keyrings/kubernetes-apt-keyring.gpg
 echo "deb [signed-by=/etc/apt/keyrings/kubernetes-apt-keyring.gpg] https://pkgs.k8s.io/core:/stable:/${K8S_REPO_MINOR}/deb/ /" \\
   | sudo tee /etc/apt/sources.list.d/kubernetes.list >/dev/null
 
-echo "== [D] apt-get update =="
-sudo apt-get update || true
+echo "== [D] apt-get update (should be clean now) =="
+sudo apt-get update
 
 echo "== [E] Install kubeadm/kubelet/kubectl/cri-tools =="
 sudo apt-get install -y kubeadm kubelet kubectl cri-tools
@@ -168,7 +191,7 @@ sudo sysctl --system >/dev/null || true
 echo "== [I] Enable kubelet =="
 sudo systemctl enable --now kubelet || true
 
-echo "== [J] Versions (best effort) =="
+echo "== [J] Quick versions =="
 kubeadm version || true
 kubelet --version || true
 kubectl version --client=true || true
@@ -195,6 +218,7 @@ echo "================================================="
 
 ssh_do "$KUBE1_IP" "bash -lc '
 set -Eeuo pipefail
+
 if [ -f /etc/kubernetes/admin.conf ]; then
   echo \"⚠️ kubeadm already initialized – skipping init\"
 else
@@ -246,7 +270,7 @@ fi
 done
 
 ###############################################################################
-# PHASE 5 – Install Calico (operator + Installation CR)
+# PHASE 5 – Install Calico on kube-1
 ###############################################################################
 echo
 echo "================================================="
@@ -316,7 +340,7 @@ echo \"--- FINAL STATUS (nodes) ---\"
 kubectl get nodes -o wide
 
 echo
-echo \"--- FINAL STATUS (system pods) ---\"
+echo \"--- FINAL STATUS (pods) ---\"
 kubectl get pods -A -o wide
 '"
 
