@@ -1,16 +1,22 @@
 #!/usr/bin/env bash
 set -Eeuo pipefail
 
-############################################
-# INTERAKTIVE ZUGANGSDATEN
-############################################
+###############################################################################
+# bootstrap-k8s-calico-lab-verbose.sh
+# - Runs from ANY admin machine that can SSH to the nodes
+# - Executes everything via SSH on the nodes (no local apt/kubeadm)
+# - Asks for SSH username/password
+# - LAB workaround: neutralizes shim-signed/grub-efi dpkg breakage
+# - Installs Kubernetes v1.32 repo (pkgs.k8s.io), kubeadm/kubelet/kubectl/cri-tools
+# - kubeadm init on kube-1, joins kube-2/kube-3, installs Calico (operator)
+###############################################################################
+
+# ---- Ask for credentials (no echo for password)
 read -rp "SSH Username: " USER
 read -rsp "SSH Password: " PASS
 echo
 
-############################################
-# CLUSTER SETTINGS
-############################################
+# ---- Node inventory
 KUBE1_IP="10.0.0.101"
 KUBE2_IP="10.0.0.102"
 KUBE3_IP="10.0.0.103"
@@ -19,28 +25,20 @@ KUBE1_HOST="kube-1"
 KUBE2_HOST="kube-2"
 KUBE3_HOST="kube-3"
 
-POD_CIDR="192.168.0.0/16"
-K8S_REPO_MINOR="v1.32"
-CALICO_VERSION="v3.30.2"
-
 NODES=(
   "$KUBE1_IP:$KUBE1_HOST"
   "$KUBE2_IP:$KUBE2_HOST"
   "$KUBE3_IP:$KUBE3_HOST"
 )
 
-############################################
-# PRECHECKS
-############################################
-echo "================================================="
-echo "🔍 Preflight checks"
-echo "================================================="
+# ---- Cluster config
+POD_CIDR="192.168.0.0/16"
+K8S_REPO_MINOR="v1.32"        # pkgs.k8s.io channel
+CALICO_VERSION="v3.30.2"
 
+# ---- Local prerequisites
 for cmd in ssh sshpass; do
-  if ! command -v "$cmd" >/dev/null; then
-    echo "❌ Required command missing: $cmd"
-    exit 1
-  fi
+  command -v "$cmd" >/dev/null 2>&1 || { echo "ERROR: missing local command: $cmd" >&2; exit 1; }
 done
 
 SSH_OPTS=(
@@ -52,29 +50,27 @@ SSH_OPTS=(
 ssh_do() {
   local ip="$1"; shift
   echo
-  echo "-------------------------------------------------"
-  echo "➡️  [$ip] EXEC:"
-  echo "    $*"
-  echo "-------------------------------------------------"
+  echo "===================================================================="
+  echo "➡️  [$ip] $*"
+  echo "===================================================================="
   sshpass -p "$PASS" ssh "${SSH_OPTS[@]}" "${USER}@${ip}" "$@"
 }
 
-############################################
-# PHASE 0 – CONNECTIVITY
-############################################
+###############################################################################
+# PHASE 0 – Connectivity
+###############################################################################
 echo
 echo "================================================="
 echo "🚀 PHASE 0 – SSH Connectivity"
 echo "================================================="
-
 for n in "${NODES[@]}"; do
   ip="${n%%:*}"
   ssh_do "$ip" "echo Connected to \$(hostname) as \$(whoami)"
 done
 
-############################################
-# PHASE 1 – HOSTNAMES + /etc/hosts
-############################################
+###############################################################################
+# PHASE 1 – Hostnames + /etc/hosts
+###############################################################################
 echo
 echo "================================================="
 echo "🧭 PHASE 1 – Hostnames & /etc/hosts"
@@ -90,31 +86,39 @@ EOF
 for n in "${NODES[@]}"; do
   ip="${n%%:*}"
   host="${n##*:}"
-  ssh_do "$ip" "
+  ssh_do "$ip" "bash -lc '
 set -Eeuo pipefail
 export DEBIAN_FRONTEND=noninteractive
-echo 'Setting hostname to $host'
-sudo hostnamectl set-hostname $host
+echo \"Setting hostname -> ${host}\"
+sudo hostnamectl set-hostname \"${host}\"
 
-echo 'Updating /etc/hosts'
-printf '\n# kubernetes cluster\n%s\n' \"$HOSTS_BLOCK\" | sudo tee -a /etc/hosts >/dev/null
+echo \"Appending /etc/hosts (idempotency not guaranteed; lab-friendly)\"
+printf \"\n# kubernetes cluster\n%s\n\" \"${HOSTS_BLOCK}\" | sudo tee -a /etc/hosts >/dev/null
 
-echo 'Hostname now:'
+echo \"Hostname now:\"
 hostname
-"
+'"
 done
 
-############################################
-# PHASE 2 – KUBERNETES INSTALLATION (robust repo/key)
-############################################
+###############################################################################
+# PHASE 2 – Install Kubernetes packages (robust repo + LAB shim fix)
+###############################################################################
 echo
 echo "================================================="
-echo "📦 PHASE 2 – Kubernetes installation (repo/key robust, non-tty)"
+echo "📦 PHASE 2 – Kubernetes install on ALL nodes (LAB-safe, verbose)"
 echo "================================================="
 
 REMOTE_INSTALL=$(cat <<EOS
 set -Eeuo pipefail
 export DEBIAN_FRONTEND=noninteractive
+
+echo "== [LAB FIX] Neutralize shim-signed/grub-efi issues (dpkg must not block) =="
+# In your lab, shim-signed postinst can fail (no /dev/disk/by-id). We prevent it from breaking apt.
+sudo apt-mark hold shim-signed grub-efi-amd64 grub-efi-amd64-signed || true
+
+echo "== [LAB FIX] Try to recover dpkg state (ignore failures, continue) =="
+sudo dpkg --configure -a || true
+sudo apt-get -f install -y || true
 
 echo "== [A] Remove old Kubernetes repo entries (e.g. v1.28) =="
 sudo rm -f /etc/apt/sources.list.d/kubernetes.list
@@ -122,13 +126,14 @@ sudo rm -f /etc/apt/sources.list.d/*kubernetes*.list || true
 sudo rm -f /etc/apt/trusted.gpg.d/*kubernetes* || true
 
 echo "== [B] Base packages =="
-sudo apt-get update
+sudo apt-get update || true
 sudo apt-get install -y ca-certificates curl gpg apt-transport-https
 
 echo "== [C] Configure Kubernetes repo (${K8S_REPO_MINOR}) =="
 sudo mkdir -p /etc/apt/keyrings
 curl -fsSL https://pkgs.k8s.io/core:/stable:/${K8S_REPO_MINOR}/deb/Release.key -o /tmp/k8s-release.key
 
+# Non-interactive dearmor (no /dev/tty)
 sudo gpg --dearmor --batch --yes --no-tty \\
   -o /etc/apt/keyrings/kubernetes-apt-keyring.gpg /tmp/k8s-release.key
 
@@ -137,15 +142,15 @@ sudo chmod 0644 /etc/apt/keyrings/kubernetes-apt-keyring.gpg
 echo "deb [signed-by=/etc/apt/keyrings/kubernetes-apt-keyring.gpg] https://pkgs.k8s.io/core:/stable:/${K8S_REPO_MINOR}/deb/ /" \\
   | sudo tee /etc/apt/sources.list.d/kubernetes.list >/dev/null
 
-echo "== [D] apt-get update (should be clean now) =="
-sudo apt-get update
+echo "== [D] apt-get update =="
+sudo apt-get update || true
 
 echo "== [E] Install kubeadm/kubelet/kubectl/cri-tools =="
 sudo apt-get install -y kubeadm kubelet kubectl cri-tools
-sudo apt-mark hold kubeadm kubelet kubectl
+sudo apt-mark hold kubeadm kubelet kubectl || true
 
-echo "== [F] Disable swap =="
-sudo swapoff -a
+echo "== [F] Disable swap (required by kubelet) =="
+sudo swapoff -a || true
 sudo sed -i '/ swap / s/^/#/' /etc/fstab || true
 
 echo "== [G] Kernel modules =="
@@ -158,13 +163,12 @@ net.bridge.bridge-nf-call-iptables  = 1
 net.bridge.bridge-nf-call-ip6tables = 1
 net.ipv4.ip_forward                 = 1
 EOF
-
-sudo sysctl --system
+sudo sysctl --system >/dev/null || true
 
 echo "== [I] Enable kubelet =="
-sudo systemctl enable --now kubelet
+sudo systemctl enable --now kubelet || true
 
-echo "== [J] Versions =="
+echo "== [J] Versions (best effort) =="
 kubeadm version || true
 kubelet --version || true
 kubectl version --client=true || true
@@ -181,77 +185,83 @@ for n in "${NODES[@]}"; do
   ssh_do "$ip" "bash -s" <<<"$REMOTE_INSTALL"
 done
 
-############################################
-# PHASE 3 – KUBEADM INIT (kube-1)
-############################################
+###############################################################################
+# PHASE 3 – kubeadm init on kube-1
+###############################################################################
 echo
 echo "================================================="
 echo "🧠 PHASE 3 – kubeadm init (kube-1)"
 echo "================================================="
 
-ssh_do "$KUBE1_IP" "
+ssh_do "$KUBE1_IP" "bash -lc '
 set -Eeuo pipefail
 if [ -f /etc/kubernetes/admin.conf ]; then
-  echo '⚠️ kubeadm already initialized – skipping init'
+  echo \"⚠️ kubeadm already initialized – skipping init\"
 else
-  echo 'Running kubeadm init...'
+  echo \"Running kubeadm init (pod CIDR: ${POD_CIDR})\"
   sudo kubeadm init --pod-network-cidr=${POD_CIDR}
 fi
-"
+'"
 
-ssh_do "$KUBE1_IP" "
+ssh_do "$KUBE1_IP" "bash -lc '
 set -Eeuo pipefail
-echo 'Configuring kubectl for user ${USER}'
+echo \"Configuring kubectl for user ${USER}\"
 mkdir -p /home/${USER}/.kube
-sudo cp /etc/kubernetes/admin.conf /home/${USER}/.kube/config
+sudo cp -f /etc/kubernetes/admin.conf /home/${USER}/.kube/config
 sudo chown -R ${USER}:${USER} /home/${USER}/.kube
 
-echo 'Current node status:'
+echo \"Current node status (expect NotReady until CNI is installed):\"
 kubectl get nodes -o wide || true
-"
+'"
 
-############################################
-# PHASE 4 – JOIN WORKERS
-############################################
+###############################################################################
+# PHASE 4 – Join kube-2/kube-3
+###############################################################################
 echo
 echo "================================================="
 echo "🧩 PHASE 4 – Join worker nodes"
 echo "================================================="
 
-JOIN_CMD=$(ssh_do "$KUBE1_IP" "sudo kubeadm token create --print-join-command" | tail -n 1)
+JOIN_CMD=$(sshpass -p "$PASS" ssh "${SSH_OPTS[@]}" "${USER}@${KUBE1_IP}" "sudo kubeadm token create --print-join-command" | tr -d '\r' | tail -n 1)
+if [[ -z "${JOIN_CMD}" ]]; then
+  echo "ERROR: Could not obtain join command from kube-1" >&2
+  exit 1
+fi
+
 echo
-echo "➡️  Join command from kube-1:"
-echo "    $JOIN_CMD"
+echo "➡️  Join command:"
+echo "    ${JOIN_CMD}"
+echo
 
 for ip in "$KUBE2_IP" "$KUBE3_IP"; do
-  ssh_do "$ip" "
+  ssh_do "$ip" "bash -lc '
 set -Eeuo pipefail
 if [ -f /etc/kubernetes/kubelet.conf ]; then
-  echo '⚠️ Node already joined – skipping'
+  echo \"⚠️ Already joined – skipping\"
 else
-  echo 'Joining node to cluster...'
+  echo \"Joining this node...\"
   sudo ${JOIN_CMD}
 fi
-"
+'"
 done
 
-############################################
-# PHASE 5 – CALICO
-############################################
+###############################################################################
+# PHASE 5 – Install Calico (operator + Installation CR)
+###############################################################################
 echo
 echo "================================================="
-echo "🌐 PHASE 5 – Install Calico"
+echo "🌐 PHASE 5 – Install Calico (kube-1)"
 echo "================================================="
 
-ssh_do "$KUBE1_IP" "
+ssh_do "$KUBE1_IP" "bash -lc '
 set -Eeuo pipefail
 export KUBECONFIG=/etc/kubernetes/admin.conf
 
-echo 'Installing Tigera operator (${CALICO_VERSION})'
+echo \"Applying Tigera operator (${CALICO_VERSION})\"
 kubectl apply -f https://raw.githubusercontent.com/projectcalico/calico/${CALICO_VERSION}/manifests/tigera-operator.yaml
 
-echo 'Applying Calico Installation CR (POD_CIDR=${POD_CIDR})'
-cat <<'EOF' | kubectl apply -f -
+echo \"Applying Installation CR (pod CIDR: ${POD_CIDR})\"
+cat <<EOF | kubectl apply -f -
 apiVersion: operator.tigera.io/v1
 kind: Installation
 metadata:
@@ -266,48 +276,50 @@ spec:
       nodeSelector: all()
 EOF
 
-echo 'Current pods (watch for calico-node appearing):'
+echo \"Pods snapshot:\"
 kubectl get pods -A -o wide || true
-"
+'"
 
-############################################
-# PHASE 6 – VERIFY (mit Timeout)
-############################################
+###############################################################################
+# PHASE 6 – Verify (wait for Ready)
+###############################################################################
 echo
 echo "================================================="
-echo "✅ PHASE 6 – Verification (wait for Ready)"
+echo "✅ PHASE 6 – Verification (kube-1)"
 echo "================================================="
 
-ssh_do "$KUBE1_IP" '
+ssh_do "$KUBE1_IP" "bash -lc '
 set -Eeuo pipefail
 export KUBECONFIG=/etc/kubernetes/admin.conf
 
-echo "Waiting for calico-node DS to appear..."
+echo \"Waiting for calico-node DaemonSet to appear...\"
 for i in {1..60}; do
-  kubectl get ds -A 2>/dev/null | grep -q "calico-node" && break
+  kubectl get ds -A 2>/dev/null | grep -q \"calico-node\" && break
   sleep 5
 done
-kubectl get ds -A | grep -E "calico-node|NAME" || true
+kubectl get ds -A | grep -E \"calico-node|NAME\" || true
 
-echo "Waiting for all nodes to be Ready..."
+echo \"Waiting for all nodes Ready (max ~5 min)...\"
 for i in {1..60}; do
-  notready=$(kubectl get nodes --no-headers 2>/dev/null | awk '\''$2!="Ready"{c++} END{print c+0}'\'')
-  if [ "$notready" -eq 0 ]; then
-    echo "✅ All nodes Ready"
+  notready=\$(kubectl get nodes --no-headers 2>/dev/null | awk '\''\$2!=\"Ready\"{c++} END{print c+0}'\'')
+  if [ \"\$notready\" -eq 0 ]; then
+    echo \"✅ All nodes are Ready\"
     break
   fi
-  echo "Still not ready nodes: $notready"
+  echo \"Still not ready nodes: \$notready\"
   kubectl get nodes -o wide || true
   sleep 5
 done
 
 echo
-echo "--- FINAL STATUS ---"
+echo \"--- FINAL STATUS (nodes) ---\"
 kubectl get nodes -o wide
-echo
-kubectl get pods -A -o wide
-'
 
 echo
-echo "🎉 CLUSTER BOOTSTRAP COMPLETE"
-echo "Next: SSH to kube-1 and run: kubectl get pods -A"
+echo \"--- FINAL STATUS (system pods) ---\"
+kubectl get pods -A -o wide
+'"
+
+echo
+echo "🎉 BOOTSTRAP COMPLETE"
+echo "Next: ssh ${USER}@${KUBE1_IP} and run: kubectl get pods -A"
