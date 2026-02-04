@@ -4,33 +4,29 @@ set -Eeuo pipefail
 ###############################################################################
 # bootstrap-k8s-calico-lab-verbose.sh
 #
-# Purpose:
-#   Bootstrap a 3-node Kubernetes lab cluster over SSH (password auth) with:
-#     - kube-1 (10.0.0.101) as control-plane
-#     - kube-2 (10.0.0.102) worker
-#     - kube-3 (10.0.0.103) worker
-#   Then install Calico via Tigera Operator (VXLAN) using POD_CIDR=192.168.0.0/16
+# Bootstraps a 3-node Kubernetes LAB cluster over SSH (password auth) and
+# installs Calico (Tigera Operator) afterwards.
 #
-# Lab findings handled:
-#   1) Some nodes may have dpkg blocked by shim-signed postinst when run non-TTY.
-#      -> We FORCE a TTY for SSH sessions (-tt).
-#      -> We run a dpkg recovery step early (best effort).
-#   2) Old pkgs.k8s.io repos (e.g. v1.28) may exist and cause EXPKEYSIG.
-#      -> We remove old kubernetes list files and key remnants, then re-add v1.32.
-#   3) gpg can fail without /dev/tty when piped.
-#      -> We download key to file, then gpg --dearmor --batch --no-tty.
+# Nodes:
+#   kube-1 10.0.0.101 (control-plane)
+#   kube-2 10.0.0.102 (worker)
+#   kube-3 10.0.0.103 (worker)
 #
-# Requirements on the machine you run this script from:
+# Lab-specific hardening (findings):
+#   - Some lab images lack /dev/disk/by-id; shim-signed postinst may fail with:
+#       "Unknown device /dev/disk/by-id/*"
+#     -> We create /dev/disk/by-id and at least one symlink before apt runs.
+#   - shim-signed/debconf scripts can require a tty
+#     -> We force SSH pseudo-tty (-tt).
+#   - Old pkgs.k8s.io repos (e.g. v1.28) can break with EXPKEYSIG
+#     -> We remove old kubernetes list files and re-add v1.32.
+#   - gpg can fail when piped without tty
+#     -> We download key to file then gpg --dearmor --batch --no-tty.
+#
+# Run this script from ANY admin machine that can SSH into the nodes.
+# Local requirements:
 #   - ssh
 #   - sshpass
-#
-# Assumptions on nodes:
-#   - User exists on all nodes and can sudo (password prompt ok)
-#   - Ubuntu Jammy-like environment with apt
-#   - container runtime is already present OR provided by lab (not installed here)
-#
-# NOTE:
-#   This is a LAB-focused script. It prioritizes progress and verbosity.
 ###############################################################################
 
 # ---- Ask for credentials
@@ -38,7 +34,7 @@ read -rp "SSH Username: " USER
 read -rsp "SSH Password: " PASS
 echo
 
-# ---- Nodes
+# ---- Node inventory
 KUBE1_IP="10.0.0.101"
 KUBE2_IP="10.0.0.102"
 KUBE3_IP="10.0.0.103"
@@ -64,7 +60,7 @@ for cmd in ssh sshpass; do
 done
 
 # ---- SSH settings
-# -tt is CRITICAL for shim-signed/debconf postinst scripts that expect /dev/tty.
+# -tt is CRITICAL for shim-signed/debconf postinst scripts that expect /dev/tty
 SSH_OPTS=(
   -tt
   -o StrictHostKeyChecking=no
@@ -115,31 +111,45 @@ for n in "${NODES[@]}"; do
 set -Eeuo pipefail
 export DEBIAN_FRONTEND=noninteractive
 
-echo \"Setting hostname -> ${host}\"
-sudo hostnamectl set-hostname \"${host}\"
+echo "Setting hostname -> ${host}"
+sudo hostnamectl set-hostname "${host}"
 
-echo \"Appending /etc/hosts (lab-friendly; may duplicate on reruns)\"
-printf \"\n# kubernetes cluster\n%s\n\" \"${HOSTS_BLOCK}\" | sudo tee -a /etc/hosts >/dev/null
+echo "Appending /etc/hosts (lab-friendly; may duplicate on reruns)"
+printf "\n# kubernetes cluster\n%s\n" "${HOSTS_BLOCK}" | sudo tee -a /etc/hosts >/dev/null
 
-echo \"Hostname now:\"
+echo "Hostname now:"
 hostname
 '"
 done
 
 ###############################################################################
-# PHASE 2 – Prepare dpkg (LAB) + Install Kubernetes packages on all nodes
+# PHASE 2 – Lab-fix + Kubernetes install on all nodes
 ###############################################################################
 echo
 echo "================================================="
-echo "📦 PHASE 2 – dpkg recovery (LAB) + Kubernetes install on ALL nodes"
+echo "📦 PHASE 2 – LAB fix + Kubernetes install on ALL nodes"
 echo "================================================="
 
 REMOTE_INSTALL=$(cat <<EOS
 set -Eeuo pipefail
 export DEBIAN_FRONTEND=noninteractive
 
+echo "== [LAB FIX] Ensure /dev/disk/by-id exists (shim-signed expects it) =="
+sudo mkdir -p /dev/disk/by-id
+
+ROOTDEV="\$(findmnt -n -o SOURCE / || true)"
+ROOTDEV_REAL="\$(readlink -f "\$ROOTDEV" 2>/dev/null || true)"
+
+if [ -n "\$ROOTDEV_REAL" ] && [ -e "\$ROOTDEV_REAL" ]; then
+  sudo ln -sf "\$ROOTDEV_REAL" /dev/disk/by-id/lab-root
+elif [ -e /dev/loop0 ]; then
+  sudo ln -sf /dev/loop0 /dev/disk/by-id/lab-loop0
+else
+  sudo ln -sf /dev/null /dev/disk/by-id/lab-null
+fi
+sudo ls -l /dev/disk/by-id || true
+
 echo "== [LAB] dpkg recovery (best effort) =="
-# If shim-signed is half-configured, dpkg may be stuck. With TTY (-tt) this often succeeds.
 sudo dpkg --configure -a || true
 sudo apt-get -f install -y || true
 
@@ -156,13 +166,12 @@ echo "== [C] Configure Kubernetes repo (${K8S_REPO_MINOR}) =="
 sudo mkdir -p /etc/apt/keyrings
 curl -fsSL https://pkgs.k8s.io/core:/stable:/${K8S_REPO_MINOR}/deb/Release.key -o /tmp/k8s-release.key
 
-# Non-interactive gpg (no /dev/tty needed)
-sudo gpg --dearmor --batch --yes --no-tty \\
+sudo gpg --dearmor --batch --yes --no-tty \
   -o /etc/apt/keyrings/kubernetes-apt-keyring.gpg /tmp/k8s-release.key
 
 sudo chmod 0644 /etc/apt/keyrings/kubernetes-apt-keyring.gpg
 
-echo "deb [signed-by=/etc/apt/keyrings/kubernetes-apt-keyring.gpg] https://pkgs.k8s.io/core:/stable:/${K8S_REPO_MINOR}/deb/ /" \\
+echo "deb [signed-by=/etc/apt/keyrings/kubernetes-apt-keyring.gpg] https://pkgs.k8s.io/core:/stable:/${K8S_REPO_MINOR}/deb/ /" \
   | sudo tee /etc/apt/sources.list.d/kubernetes.list >/dev/null
 
 echo "== [D] apt-get update (should be clean now) =="
@@ -220,21 +229,21 @@ ssh_do "$KUBE1_IP" "bash -lc '
 set -Eeuo pipefail
 
 if [ -f /etc/kubernetes/admin.conf ]; then
-  echo \"⚠️ kubeadm already initialized – skipping init\"
+  echo "⚠️ kubeadm already initialized – skipping init"
 else
-  echo \"Running kubeadm init (pod CIDR: ${POD_CIDR})\"
+  echo "Running kubeadm init (pod CIDR: ${POD_CIDR})"
   sudo kubeadm init --pod-network-cidr=${POD_CIDR}
 fi
 '"
 
 ssh_do "$KUBE1_IP" "bash -lc '
 set -Eeuo pipefail
-echo \"Configuring kubectl for user ${USER}\"
+echo "Configuring kubectl for user ${USER}"
 mkdir -p /home/${USER}/.kube
 sudo cp -f /etc/kubernetes/admin.conf /home/${USER}/.kube/config
 sudo chown -R ${USER}:${USER} /home/${USER}/.kube
 
-echo \"Current node status (expect NotReady until CNI is installed):\"
+echo "Current node status (expect NotReady until CNI is installed):"
 kubectl get nodes -o wide || true
 '"
 
@@ -261,9 +270,9 @@ for ip in "$KUBE2_IP" "$KUBE3_IP"; do
   ssh_do "$ip" "bash -lc '
 set -Eeuo pipefail
 if [ -f /etc/kubernetes/kubelet.conf ]; then
-  echo \"⚠️ Already joined – skipping\"
+  echo "⚠️ Already joined – skipping"
 else
-  echo \"Joining this node...\"
+  echo "Joining this node..."
   sudo ${JOIN_CMD}
 fi
 '"
@@ -281,10 +290,10 @@ ssh_do "$KUBE1_IP" "bash -lc '
 set -Eeuo pipefail
 export KUBECONFIG=/etc/kubernetes/admin.conf
 
-echo \"Applying Tigera operator (${CALICO_VERSION})\"
+echo "Applying Tigera operator (${CALICO_VERSION})"
 kubectl apply -f https://raw.githubusercontent.com/projectcalico/calico/${CALICO_VERSION}/manifests/tigera-operator.yaml
 
-echo \"Applying Installation CR (pod CIDR: ${POD_CIDR})\"
+echo "Applying Installation CR (pod CIDR: ${POD_CIDR})"
 cat <<EOF | kubectl apply -f -
 apiVersion: operator.tigera.io/v1
 kind: Installation
@@ -300,7 +309,7 @@ spec:
       nodeSelector: all()
 EOF
 
-echo \"Pods snapshot:\"
+echo "Pods snapshot:"
 kubectl get pods -A -o wide || true
 '"
 
@@ -316,31 +325,31 @@ ssh_do "$KUBE1_IP" "bash -lc '
 set -Eeuo pipefail
 export KUBECONFIG=/etc/kubernetes/admin.conf
 
-echo \"Waiting for calico-node DaemonSet to appear...\"
+echo "Waiting for calico-node DaemonSet to appear..."
 for i in {1..60}; do
-  kubectl get ds -A 2>/dev/null | grep -q \"calico-node\" && break
+  kubectl get ds -A 2>/dev/null | grep -q "calico-node" && break
   sleep 5
 done
-kubectl get ds -A | grep -E \"calico-node|NAME\" || true
+kubectl get ds -A | grep -E "calico-node|NAME" || true
 
-echo \"Waiting for all nodes Ready (max ~5 min)...\"
+echo "Waiting for all nodes Ready (max ~5 min)..."
 for i in {1..60}; do
-  notready=\$(kubectl get nodes --no-headers 2>/dev/null | awk '\''\$2!=\"Ready\"{c++} END{print c+0}'\'')
-  if [ \"\$notready\" -eq 0 ]; then
-    echo \"✅ All nodes are Ready\"
+  notready=\$(kubectl get nodes --no-headers 2>/dev/null | awk '\''$2!="Ready"{c++} END{print c+0}\'')
+  if [ "\$notready" -eq 0 ]; then
+    echo "✅ All nodes are Ready"
     break
   fi
-  echo \"Still not ready nodes: \$notready\"
+  echo "Still not ready nodes: \$notready"
   kubectl get nodes -o wide || true
   sleep 5
 done
 
 echo
-echo \"--- FINAL STATUS (nodes) ---\"
+echo "--- FINAL STATUS (nodes) ---"
 kubectl get nodes -o wide
 
 echo
-echo \"--- FINAL STATUS (pods) ---\"
+echo "--- FINAL STATUS (pods) ---"
 kubectl get pods -A -o wide
 '"
 
