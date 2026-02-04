@@ -2,14 +2,14 @@
 set -Eeuo pipefail
 
 ###############################################################################
-# bootstrap-k8s-calico-lab-verbose.sh (heredoc-free local script)
+# bootstrap-k8s-calico-lab-verbose-stable.sh
 #
-# Fixes the recurring "syntax error near unexpected token '('" issue by
-# removing local here-doc blocks (EOF/EOS), which are very sensitive to
-# copy/paste / CRLF / stray spaces.
-#
-# It still runs remote multi-line scripts, but those are embedded as Bash
-# $'...' strings (no local heredocs).
+# Goals:
+# - No LOCAL heredocs (EOF/EOS) to avoid copy/paste CRLF/whitespace issues.
+# - Remote scripts are sent via stdin (bash -s) using bash here-strings (<<<),
+#   and their internal file/YAML creation uses printf/tee (no heredocs).
+# - Forces SSH TTY (-tt) for debconf/postinst scripts.
+# - LAB fix: create /dev/disk/by-id and at least one symlink to satisfy shim-signed.
 ###############################################################################
 
 read -rp "SSH Username: " USER
@@ -24,7 +24,6 @@ KUBE1_HOST="kube-1"
 KUBE2_HOST="kube-2"
 KUBE3_HOST="kube-3"
 
-# Array syntax requires bash (this script must be run with bash)
 NODES=(
   "${KUBE1_IP}:${KUBE1_HOST}"
   "${KUBE2_IP}:${KUBE2_HOST}"
@@ -39,7 +38,6 @@ for cmd in ssh sshpass; do
   command -v "$cmd" >/dev/null 2>&1 || { echo "ERROR: missing local command: $cmd" >&2; exit 1; }
 done
 
-# -tt: give remote commands a pseudo-tty (needed for some postinst scripts)
 SSH_OPTS=(
   -tt
   -o StrictHostKeyChecking=no
@@ -56,6 +54,17 @@ ssh_do() {
   sshpass -p "$PASS" ssh "${SSH_OPTS[@]}" "${USER}@${ip}" "$@"
 }
 
+ssh_bash_stdin() {
+  local ip="$1"; shift
+  local script_content="$1"
+  echo
+  echo "===================================================================="
+  echo "➡️  [$ip] bash -s  (remote script via stdin)"
+  echo "===================================================================="
+  # shellcheck disable=SC2029
+  sshpass -p "$PASS" ssh "${SSH_OPTS[@]}" "${USER}@${ip}" "bash -s" <<<"$script_content"
+}
+
 echo
 echo "================================================="
 echo "🚀 PHASE 0 – SSH Connectivity"
@@ -70,7 +79,6 @@ echo "================================================="
 echo "🧭 PHASE 1 – Hostnames & /etc/hosts"
 echo "================================================="
 
-# heredoc-free hosts block
 HOSTS_BLOCK="${KUBE1_IP} ${KUBE1_HOST}
 ${KUBE2_IP} ${KUBE2_HOST}
 ${KUBE3_IP} ${KUBE3_HOST}"
@@ -78,20 +86,12 @@ ${KUBE3_IP} ${KUBE3_HOST}"
 for n in "${NODES[@]}"; do
   ip="${n%%:*}"
   host="${n##*:}"
-  ssh_do "$ip" "bash -lc $(printf %q "$(
-    printf '%s\n' \
-'set -Eeuo pipefail' \
-'export DEBIAN_FRONTEND=noninteractive' \
-'' \
-"echo \"Setting hostname -> ${host}\"" \
-"sudo hostnamectl set-hostname \"${host}\"" \
-'' \
-'echo "Appending /etc/hosts (lab-friendly; may duplicate on reruns)"' \
-"printf \"\\n# kubernetes cluster\\n%s\\n\" \"${HOSTS_BLOCK}\" | sudo tee -a /etc/hosts >/dev/null" \
-'' \
-'echo "Hostname now:"' \
-'hostname'
-  )")"
+
+  printf -v REMOTE_HOSTS_SCRIPT '%s
+'     'set -Eeuo pipefail'     'export DEBIAN_FRONTEND=noninteractive'     "echo "Setting hostname -> ${host}""     "sudo hostnamectl set-hostname "${host}""     'echo "Appending /etc/hosts (lab-friendly; may duplicate on reruns)"'     # Use printf piped to tee (no heredoc)
+    "printf '\n# kubernetes cluster\n%s\n' "${HOSTS_BLOCK}" | sudo tee -a /etc/hosts >/dev/null"     'echo "Hostname now:"'     'hostname'
+
+  ssh_bash_stdin "$ip" "$REMOTE_HOSTS_SCRIPT"
 done
 
 echo
@@ -99,82 +99,16 @@ echo "================================================="
 echo "📦 PHASE 2 – LAB fix + Kubernetes install on ALL nodes"
 echo "================================================="
 
-REMOTE_INSTALL=$'set -Eeuo pipefail\n\
-export DEBIAN_FRONTEND=noninteractive\n\
-\n\
-echo "== [LAB FIX] Ensure /dev/disk/by-id exists (shim-signed expects it) ==" \n\
-sudo mkdir -p /dev/disk/by-id\n\
-ROOTDEV="$(findmnt -n -o SOURCE / || true)"\n\
-ROOTDEV_REAL="$(readlink -f "$ROOTDEV" 2>/dev/null || true)"\n\
-if [ -n "$ROOTDEV_REAL" ] && [ -e "$ROOTDEV_REAL" ]; then\n\
-  sudo ln -sf "$ROOTDEV_REAL" /dev/disk/by-id/lab-root\n\
-elif [ -e /dev/loop0 ]; then\n\
-  sudo ln -sf /dev/loop0 /dev/disk/by-id/lab-loop0\n\
-else\n\
-  sudo ln -sf /dev/null /dev/disk/by-id/lab-null\n\
-fi\n\
-sudo ls -l /dev/disk/by-id || true\n\
-\n\
-echo "== [LAB] dpkg recovery (best effort) ==" \n\
-sudo dpkg --configure -a || true\n\
-sudo apt-get -f install -y || true\n\
-\n\
-echo "== [A] Remove old Kubernetes repo entries (e.g. v1.28) ==" \n\
-sudo rm -f /etc/apt/sources.list.d/kubernetes.list\n\
-sudo rm -f /etc/apt/sources.list.d/*kubernetes*.list || true\n\
-sudo rm -f /etc/apt/trusted.gpg.d/*kubernetes* || true\n\
-\n\
-echo "== [B] Base packages (repo tooling) ==" \n\
-sudo apt-get update\n\
-sudo apt-get install -y ca-certificates curl gpg apt-transport-https\n\
-\n\
-echo "== [C] Configure Kubernetes repo ('"$K8S_REPO_MINOR"') ==" \n\
-sudo mkdir -p /etc/apt/keyrings\n\
-curl -fsSL https://pkgs.k8s.io/core:/stable:/'"$K8S_REPO_MINOR"'/deb/Release.key -o /tmp/k8s-release.key\n\
-sudo gpg --dearmor --batch --yes --no-tty -o /etc/apt/keyrings/kubernetes-apt-keyring.gpg /tmp/k8s-release.key\n\
-sudo chmod 0644 /etc/apt/keyrings/kubernetes-apt-keyring.gpg\n\
-echo "deb [signed-by=/etc/apt/keyrings/kubernetes-apt-keyring.gpg] https://pkgs.k8s.io/core:/stable:/'"$K8S_REPO_MINOR"'/deb/ /" | sudo tee /etc/apt/sources.list.d/kubernetes.list >/dev/null\n\
-\n\
-echo "== [D] apt-get update (should be clean now) ==" \n\
-sudo apt-get update\n\
-\n\
-echo "== [E] Install kubeadm/kubelet/kubectl/cri-tools ==" \n\
-sudo apt-get install -y kubeadm kubelet kubectl cri-tools\n\
-sudo apt-mark hold kubeadm kubelet kubectl || true\n\
-\n\
-echo "== [F] Disable swap (required by kubelet) ==" \n\
-sudo swapoff -a || true\n\
-sudo sed -i \'/ swap / s/^/#/\' /etc/fstab || true\n\
-\n\
-echo "== [G] Kernel modules ==" \n\
-sudo modprobe br_netfilter || true\n\
-sudo modprobe overlay || true\n\
-\n\
-echo "== [H] sysctl for Kubernetes networking ==" \n\
-sudo tee /etc/sysctl.d/99-kubernetes-cri.conf >/dev/null <<\'EOF\'\n\
-net.bridge.bridge-nf-call-iptables  = 1\n\
-net.bridge.bridge-nf-call-ip6tables = 1\n\
-net.ipv4.ip_forward                 = 1\n\
-EOF\n\
-sudo sysctl --system >/dev/null || true\n\
-\n\
-echo "== [I] Enable kubelet ==" \n\
-sudo systemctl enable --now kubelet || true\n\
-\n\
-echo "== [J] Quick versions ==" \n\
-kubeadm version || true\n\
-kubelet --version || true\n\
-kubectl version --client=true || true\n\
-\n\
-echo "✅ INSTALL_OK"\n'
-
 for n in "${NODES[@]}"; do
   ip="${n%%:*}"
   host="${n##*:}"
   echo
   echo "==================== NODE $host ($ip) ===================="
-  # Quote the remote script safely for bash -lc
-  ssh_do "$ip" "bash -lc $(printf %q "$REMOTE_INSTALL")"
+
+  printf -v REMOTE_INSTALL_SCRIPT '%s
+'     'set -Eeuo pipefail'     'export DEBIAN_FRONTEND=noninteractive'     'echo "== [LAB FIX] Ensure /dev/disk/by-id exists (shim-signed expects it) == "'     'sudo mkdir -p /dev/disk/by-id'     'ROOTDEV="$(findmnt -n -o SOURCE / || true)"'     'ROOTDEV_REAL="$(readlink -f "$ROOTDEV" 2>/dev/null || true)"'     'if [ -n "$ROOTDEV_REAL" ] && [ -e "$ROOTDEV_REAL" ]; then'     '  sudo ln -sf "$ROOTDEV_REAL" /dev/disk/by-id/lab-root'     'elif [ -e /dev/loop0 ]; then'     '  sudo ln -sf /dev/loop0 /dev/disk/by-id/lab-loop0'     'else'     '  sudo ln -sf /dev/null /dev/disk/by-id/lab-null'     'fi'     'sudo ls -l /dev/disk/by-id || true'     'echo "== [LAB] dpkg recovery (best effort) == "'     'sudo dpkg --configure -a || true'     'sudo apt-get -f install -y || true'     'echo "== [A] Remove old Kubernetes repo entries (e.g. v1.28) == "'     'sudo rm -f /etc/apt/sources.list.d/kubernetes.list'     'sudo rm -f /etc/apt/sources.list.d/*kubernetes*.list || true'     'sudo rm -f /etc/apt/trusted.gpg.d/*kubernetes* || true'     'echo "== [B] Base packages (repo tooling) == "'     'sudo apt-get update'     'sudo apt-get install -y ca-certificates curl gpg apt-transport-https'     f'echo "== [C] Configure Kubernetes repo ({K8S_REPO_MINOR}) == "'     'sudo mkdir -p /etc/apt/keyrings'     f'curl -fsSL https://pkgs.k8s.io/core:/stable:/{K8S_REPO_MINOR}/deb/Release.key -o /tmp/k8s-release.key'     'sudo gpg --dearmor --batch --yes --no-tty -o /etc/apt/keyrings/kubernetes-apt-keyring.gpg /tmp/k8s-release.key'     'sudo chmod 0644 /etc/apt/keyrings/kubernetes-apt-keyring.gpg'     f'echo "deb [signed-by=/etc/apt/keyrings/kubernetes-apt-keyring.gpg] https://pkgs.k8s.io/core:/stable:/{K8S_REPO_MINOR}/deb/ /" | sudo tee /etc/apt/sources.list.d/kubernetes.list >/dev/null'     'echo "== [D] apt-get update (should be clean now) == "'     'sudo apt-get update'     'echo "== [E] Install kubeadm/kubelet/kubectl/cri-tools == "'     'sudo apt-get install -y kubeadm kubelet kubectl cri-tools'     'sudo apt-mark hold kubeadm kubelet kubectl || true'     'echo "== [F] Disable swap (required by kubelet) == "'     'sudo swapoff -a || true'     "sudo sed -i '/ swap / s/^/#/' /etc/fstab || true"     'echo "== [G] Kernel modules == "'     'sudo modprobe br_netfilter || true'     'sudo modprobe overlay || true'     'echo "== [H] sysctl for Kubernetes networking == "'     "printf 'net.bridge.bridge-nf-call-iptables  = 1\nnet.bridge.bridge-nf-call-ip6tables = 1\nnet.ipv4.ip_forward                 = 1\n' | sudo tee /etc/sysctl.d/99-kubernetes-cri.conf >/dev/null"     'sudo sysctl --system >/dev/null || true'     'echo "== [I] Enable kubelet == "'     'sudo systemctl enable --now kubelet || true'     'echo "== [J] Quick versions == "'     'kubeadm version || true'     'kubelet --version || true'     'kubectl version --client=true || true'     'echo "✅ INSTALL_OK"'
+
+  ssh_bash_stdin "$ip" "$REMOTE_INSTALL_SCRIPT"
 done
 
 echo
@@ -182,32 +116,23 @@ echo "================================================="
 echo "🧠 PHASE 3 – kubeadm init (kube-1)"
 echo "================================================="
 
-REMOTE_INIT=$'set -Eeuo pipefail\n\
-if [ -f /etc/kubernetes/admin.conf ]; then\n\
-  echo "⚠️ kubeadm already initialized – skipping init"\n\
-else\n\
-  echo "Running kubeadm init (pod CIDR: '"$POD_CIDR"')"\n\
-  sudo kubeadm init --pod-network-cidr='"$POD_CIDR"'\n\
-fi\n'
+printf -v REMOTE_INIT_SCRIPT '%s
+'   'set -Eeuo pipefail'   f'if [ -f /etc/kubernetes/admin.conf ]; then echo "⚠️ kubeadm already initialized – skipping init"; else echo "Running kubeadm init (pod CIDR: {POD_CIDR})"; sudo kubeadm init --pod-network-cidr={POD_CIDR}; fi'
 
-ssh_do "$KUBE1_IP" "bash -lc $(printf %q "$REMOTE_INIT")"
+ssh_bash_stdin "$KUBE1_IP" "$REMOTE_INIT_SCRIPT"
 
-REMOTE_KUBECONFIG=$'set -Eeuo pipefail\n\
-echo "Configuring kubectl for user '"$USER"'" \n\
-mkdir -p /home/'"$USER"'/.kube\n\
-sudo cp -f /etc/kubernetes/admin.conf /home/'"$USER"'/.kube/config\n\
-sudo chown -R '"$USER"':'"$USER"' /home/'"$USER"'/.kube\n\
-echo "Current node status (expect NotReady until CNI is installed):"\n\
-kubectl get nodes -o wide || true\n'
+printf -v REMOTE_KCFG_SCRIPT '%s
+'   'set -Eeuo pipefail'   f'echo "Configuring kubectl for user {USER}"'   f'mkdir -p /home/{USER}/.kube'   f'sudo cp -f /etc/kubernetes/admin.conf /home/{USER}/.kube/config'   f'sudo chown -R {USER}:{USER} /home/{USER}/.kube'   'echo "Current node status (expect NotReady until CNI is installed):"'   'kubectl get nodes -o wide || true'
 
-ssh_do "$KUBE1_IP" "bash -lc $(printf %q "$REMOTE_KUBECONFIG")"
+ssh_bash_stdin "$KUBE1_IP" "$REMOTE_KCFG_SCRIPT"
 
 echo
 echo "================================================="
 echo "🧩 PHASE 4 – Join worker nodes"
 echo "================================================="
 
-JOIN_CMD=$(sshpass -p "$PASS" ssh "${SSH_OPTS[@]}" "${USER}@${KUBE1_IP}" "sudo kubeadm token create --print-join-command" | tr -d '\r' | tail -n 1)
+JOIN_CMD=$(sshpass -p "$PASS" ssh "${SSH_OPTS[@]}" "${USER}@${KUBE1_IP}" "sudo kubeadm token create --print-join-command" | tr -d '
+' | tail -n 1)
 if [[ -z "${JOIN_CMD}" ]]; then
   echo "ERROR: Could not obtain join command from kube-1" >&2
   exit 1
@@ -219,14 +144,9 @@ echo "    ${JOIN_CMD}"
 echo
 
 for ip in "$KUBE2_IP" "$KUBE3_IP"; do
-  REMOTE_JOIN=$'set -Eeuo pipefail\n\
-if [ -f /etc/kubernetes/kubelet.conf ]; then\n\
-  echo "⚠️ Already joined – skipping"\n\
-else\n\
-  echo "Joining this node..."\n\
-  sudo '"$JOIN_CMD"'\n\
-fi\n'
-  ssh_do "$ip" "bash -lc $(printf %q "$REMOTE_JOIN")"
+  printf -v REMOTE_JOIN_SCRIPT '%s
+'     'set -Eeuo pipefail'     'if [ -f /etc/kubernetes/kubelet.conf ]; then echo "⚠️ Already joined – skipping"; else echo "Joining this node..."; sudo '"${JOIN_CMD}"'; fi'
+  ssh_bash_stdin "$ip" "$REMOTE_JOIN_SCRIPT"
 done
 
 echo
@@ -234,65 +154,34 @@ echo "================================================="
 echo "🌐 PHASE 5 – Install Calico (kube-1)"
 echo "================================================="
 
-REMOTE_CALICO=$'set -Eeuo pipefail\n\
-export KUBECONFIG=/etc/kubernetes/admin.conf\n\
-echo "Applying Tigera operator ('"$CALICO_VERSION"')"\n\
-kubectl apply -f https://raw.githubusercontent.com/projectcalico/calico/'"$CALICO_VERSION"'/manifests/tigera-operator.yaml\n\
-\n\
-echo "Applying Installation CR (pod CIDR: '"$POD_CIDR"')"\n\
-kubectl apply -f - <<\'EOF\'\n\
-apiVersion: operator.tigera.io/v1\n\
-kind: Installation\n\
-metadata:\n\
-  name: default\n\
-spec:\n\
-  calicoNetwork:\n\
-    ipPools:\n\
-    - cidr: '"$POD_CIDR"'\n\
-      blockSize: 26\n\
-      encapsulation: VXLAN\n\
-      natOutgoing: Enabled\n\
-      nodeSelector: all()\n\
-EOF\n\
-\n\
-echo "Pods snapshot:"\n\
-kubectl get pods -A -o wide || true\n'
+CALICO_YAML="apiVersion: operator.tigera.io/v1
+kind: Installation
+metadata:
+  name: default
+spec:
+  calicoNetwork:
+    ipPools:
+    - cidr: ${POD_CIDR}
+      blockSize: 26
+      encapsulation: VXLAN
+      natOutgoing: Enabled
+      nodeSelector: all()
+"
 
-ssh_do "$KUBE1_IP" "bash -lc $(printf %q "$REMOTE_CALICO")"
+printf -v REMOTE_CALICO_SCRIPT '%s
+'   'set -Eeuo pipefail'   'export KUBECONFIG=/etc/kubernetes/admin.conf'   f'echo "Applying Tigera operator ({CALICO_VERSION})"'   f'kubectl apply -f https://raw.githubusercontent.com/projectcalico/calico/{CALICO_VERSION}/manifests/tigera-operator.yaml'   f'echo "Applying Installation CR (pod CIDR: {POD_CIDR})"'   'kubectl apply -f - <<<"'"$CALICO_YAML"'"'   'echo "Pods snapshot:"'   'kubectl get pods -A -o wide || true'
+
+ssh_bash_stdin "$KUBE1_IP" "$REMOTE_CALICO_SCRIPT"
 
 echo
 echo "================================================="
 echo "✅ PHASE 6 – Verification (kube-1)"
 echo "================================================="
 
-REMOTE_VERIFY=$'set -Eeuo pipefail\n\
-export KUBECONFIG=/etc/kubernetes/admin.conf\n\
-echo "Waiting for calico-node DaemonSet to appear..."\n\
-for i in {1..60}; do\n\
-  kubectl get ds -A 2>/dev/null | grep -q "calico-node" && break\n\
-  sleep 5\n\
-done\n\
-kubectl get ds -A | grep -E "calico-node|NAME" || true\n\
-\n\
-echo "Waiting for all nodes Ready (max ~5 min)..." \n\
-for i in {1..60}; do\n\
-  notready=$(kubectl get nodes --no-headers 2>/dev/null | awk \'$2!="Ready"{c++} END{print c+0}\')\n\
-  if [ "$notready" -eq 0 ]; then\n\
-    echo "✅ All nodes are Ready"\n\
-    break\n\
-  fi\n\
-  echo "Still not ready nodes: $notready"\n\
-  kubectl get nodes -o wide || true\n\
-  sleep 5\n\
-done\n\
-\n\
-echo "--- FINAL STATUS (nodes) ---"\n\
-kubectl get nodes -o wide\n\
-echo\n\
-echo "--- FINAL STATUS (pods) ---"\n\
-kubectl get pods -A -o wide\n'
+printf -v REMOTE_VERIFY_SCRIPT '%s
+'   'set -Eeuo pipefail'   'export KUBECONFIG=/etc/kubernetes/admin.conf'   'echo "Waiting for calico-node DaemonSet to appear..."'   'for i in {1..60}; do kubectl get ds -A 2>/dev/null | grep -q "calico-node" && break; sleep 5; done'   'kubectl get ds -A | grep -E "calico-node|NAME" || true'   'echo "Waiting for all nodes Ready (max ~5 min)..."'   'for i in {1..60}; do notready=$(kubectl get nodes --no-headers 2>/dev/null | awk '''$2!="Ready"{c++} END{print c+0}'''); if [ "$notready" -eq 0 ]; then echo "✅ All nodes are Ready"; break; fi; echo "Still not ready nodes: $notready"; kubectl get nodes -o wide || true; sleep 5; done'   'echo "--- FINAL STATUS (nodes) ---"'   'kubectl get nodes -o wide'   'echo'   'echo "--- FINAL STATUS (pods) ---"'   'kubectl get pods -A -o wide'
 
-ssh_do "$KUBE1_IP" "bash -lc $(printf %q "$REMOTE_VERIFY")"
+ssh_bash_stdin "$KUBE1_IP" "$REMOTE_VERIFY_SCRIPT"
 
 echo
 echo "🎉 BOOTSTRAP COMPLETE"
