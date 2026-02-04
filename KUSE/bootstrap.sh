@@ -2,39 +2,20 @@
 set -Eeuo pipefail
 
 ###############################################################################
-# bootstrap-k8s-calico-lab-verbose.sh
+# bootstrap-k8s-calico-lab-verbose.sh (heredoc-free local script)
 #
-# Bootstraps a 3-node Kubernetes LAB cluster over SSH (password auth) and
-# installs Calico (Tigera Operator) afterwards.
+# Fixes the recurring "syntax error near unexpected token '('" issue by
+# removing local here-doc blocks (EOF/EOS), which are very sensitive to
+# copy/paste / CRLF / stray spaces.
 #
-# Nodes:
-#   kube-1 10.0.0.101 (control-plane)
-#   kube-2 10.0.0.102 (worker)
-#   kube-3 10.0.0.103 (worker)
-#
-# Lab-specific hardening (findings):
-#   - Some lab images lack /dev/disk/by-id; shim-signed postinst may fail with:
-#       "Unknown device /dev/disk/by-id/*"
-#     -> We create /dev/disk/by-id and at least one symlink before apt runs.
-#   - shim-signed/debconf scripts can require a tty
-#     -> We force SSH pseudo-tty (-tt).
-#   - Old pkgs.k8s.io repos (e.g. v1.28) can break with EXPKEYSIG
-#     -> We remove old kubernetes list files and re-add v1.32.
-#   - gpg can fail when piped without tty
-#     -> We download key to file then gpg --dearmor --batch --no-tty.
-#
-# Run this script from ANY admin machine that can SSH into the nodes.
-# Local requirements:
-#   - ssh
-#   - sshpass
+# It still runs remote multi-line scripts, but those are embedded as Bash
+# $'...' strings (no local heredocs).
 ###############################################################################
 
-# ---- Ask for credentials
 read -rp "SSH Username: " USER
 read -rsp "SSH Password: " PASS
 echo
 
-# ---- Node inventory
 KUBE1_IP="10.0.0.101"
 KUBE2_IP="10.0.0.102"
 KUBE3_IP="10.0.0.103"
@@ -43,24 +24,22 @@ KUBE1_HOST="kube-1"
 KUBE2_HOST="kube-2"
 KUBE3_HOST="kube-3"
 
+# Array syntax requires bash (this script must be run with bash)
 NODES=(
-  "$KUBE1_IP:$KUBE1_HOST"
-  "$KUBE2_IP:$KUBE2_HOST"
-  "$KUBE3_IP:$KUBE3_HOST"
+  "${KUBE1_IP}:${KUBE1_HOST}"
+  "${KUBE2_IP}:${KUBE2_HOST}"
+  "${KUBE3_IP}:${KUBE3_HOST}"
 )
 
-# ---- Cluster config
 POD_CIDR="192.168.0.0/16"
 K8S_REPO_MINOR="v1.32"
 CALICO_VERSION="v3.30.2"
 
-# ---- Local prereqs
 for cmd in ssh sshpass; do
   command -v "$cmd" >/dev/null 2>&1 || { echo "ERROR: missing local command: $cmd" >&2; exit 1; }
 done
 
-# ---- SSH settings
-# -tt is CRITICAL for shim-signed/debconf postinst scripts that expect /dev/tty
+# -tt: give remote commands a pseudo-tty (needed for some postinst scripts)
 SSH_OPTS=(
   -tt
   -o StrictHostKeyChecking=no
@@ -77,9 +56,6 @@ ssh_do() {
   sshpass -p "$PASS" ssh "${SSH_OPTS[@]}" "${USER}@${ip}" "$@"
 }
 
-###############################################################################
-# PHASE 0 – Connectivity
-###############################################################################
 echo
 echo "================================================="
 echo "🚀 PHASE 0 – SSH Connectivity"
@@ -89,167 +65,143 @@ for n in "${NODES[@]}"; do
   ssh_do "$ip" "echo Connected to \$(hostname) as \$(whoami)"
 done
 
-###############################################################################
-# PHASE 1 – Hostnames + /etc/hosts
-###############################################################################
 echo
 echo "================================================="
 echo "🧭 PHASE 1 – Hostnames & /etc/hosts"
 echo "================================================="
 
-HOSTS_BLOCK=$(cat <<EOF
-$KUBE1_IP $KUBE1_HOST
-$KUBE2_IP $KUBE2_HOST
-$KUBE3_IP $KUBE3_HOST
-EOF
-)
+# heredoc-free hosts block
+HOSTS_BLOCK="${KUBE1_IP} ${KUBE1_HOST}
+${KUBE2_IP} ${KUBE2_HOST}
+${KUBE3_IP} ${KUBE3_HOST}"
 
 for n in "${NODES[@]}"; do
   ip="${n%%:*}"
   host="${n##*:}"
-  ssh_do "$ip" "bash -lc '
-set -Eeuo pipefail
-export DEBIAN_FRONTEND=noninteractive
-
-echo "Setting hostname -> ${host}"
-sudo hostnamectl set-hostname "${host}"
-
-echo "Appending /etc/hosts (lab-friendly; may duplicate on reruns)"
-printf "\n# kubernetes cluster\n%s\n" "${HOSTS_BLOCK}" | sudo tee -a /etc/hosts >/dev/null
-
-echo "Hostname now:"
-hostname
-'"
+  ssh_do "$ip" "bash -lc $(printf %q "$(
+    printf '%s\n' \
+'set -Eeuo pipefail' \
+'export DEBIAN_FRONTEND=noninteractive' \
+'' \
+"echo \"Setting hostname -> ${host}\"" \
+"sudo hostnamectl set-hostname \"${host}\"" \
+'' \
+'echo "Appending /etc/hosts (lab-friendly; may duplicate on reruns)"' \
+"printf \"\\n# kubernetes cluster\\n%s\\n\" \"${HOSTS_BLOCK}\" | sudo tee -a /etc/hosts >/dev/null" \
+'' \
+'echo "Hostname now:"' \
+'hostname'
+  )")"
 done
 
-###############################################################################
-# PHASE 2 – Lab-fix + Kubernetes install on all nodes
-###############################################################################
 echo
 echo "================================================="
 echo "📦 PHASE 2 – LAB fix + Kubernetes install on ALL nodes"
 echo "================================================="
 
-REMOTE_INSTALL=$(cat <<EOS
-set -Eeuo pipefail
-export DEBIAN_FRONTEND=noninteractive
-
-echo "== [LAB FIX] Ensure /dev/disk/by-id exists (shim-signed expects it) =="
-sudo mkdir -p /dev/disk/by-id
-
-ROOTDEV="\$(findmnt -n -o SOURCE / || true)"
-ROOTDEV_REAL="\$(readlink -f "\$ROOTDEV" 2>/dev/null || true)"
-
-if [ -n "\$ROOTDEV_REAL" ] && [ -e "\$ROOTDEV_REAL" ]; then
-  sudo ln -sf "\$ROOTDEV_REAL" /dev/disk/by-id/lab-root
-elif [ -e /dev/loop0 ]; then
-  sudo ln -sf /dev/loop0 /dev/disk/by-id/lab-loop0
-else
-  sudo ln -sf /dev/null /dev/disk/by-id/lab-null
-fi
-sudo ls -l /dev/disk/by-id || true
-
-echo "== [LAB] dpkg recovery (best effort) =="
-sudo dpkg --configure -a || true
-sudo apt-get -f install -y || true
-
-echo "== [A] Remove old Kubernetes repo entries (e.g. v1.28) =="
-sudo rm -f /etc/apt/sources.list.d/kubernetes.list
-sudo rm -f /etc/apt/sources.list.d/*kubernetes*.list || true
-sudo rm -f /etc/apt/trusted.gpg.d/*kubernetes* || true
-
-echo "== [B] Base packages (repo tooling) =="
-sudo apt-get update
-sudo apt-get install -y ca-certificates curl gpg apt-transport-https
-
-echo "== [C] Configure Kubernetes repo (${K8S_REPO_MINOR}) =="
-sudo mkdir -p /etc/apt/keyrings
-curl -fsSL https://pkgs.k8s.io/core:/stable:/${K8S_REPO_MINOR}/deb/Release.key -o /tmp/k8s-release.key
-
-sudo gpg --dearmor --batch --yes --no-tty \
-  -o /etc/apt/keyrings/kubernetes-apt-keyring.gpg /tmp/k8s-release.key
-
-sudo chmod 0644 /etc/apt/keyrings/kubernetes-apt-keyring.gpg
-
-echo "deb [signed-by=/etc/apt/keyrings/kubernetes-apt-keyring.gpg] https://pkgs.k8s.io/core:/stable:/${K8S_REPO_MINOR}/deb/ /" \
-  | sudo tee /etc/apt/sources.list.d/kubernetes.list >/dev/null
-
-echo "== [D] apt-get update (should be clean now) =="
-sudo apt-get update
-
-echo "== [E] Install kubeadm/kubelet/kubectl/cri-tools =="
-sudo apt-get install -y kubeadm kubelet kubectl cri-tools
-sudo apt-mark hold kubeadm kubelet kubectl || true
-
-echo "== [F] Disable swap (required by kubelet) =="
-sudo swapoff -a || true
-sudo sed -i '/ swap / s/^/#/' /etc/fstab || true
-
-echo "== [G] Kernel modules =="
-sudo modprobe br_netfilter || true
-sudo modprobe overlay || true
-
-echo "== [H] sysctl for Kubernetes networking =="
-cat <<'EOF' | sudo tee /etc/sysctl.d/99-kubernetes-cri.conf >/dev/null
-net.bridge.bridge-nf-call-iptables  = 1
-net.bridge.bridge-nf-call-ip6tables = 1
-net.ipv4.ip_forward                 = 1
-EOF
-sudo sysctl --system >/dev/null || true
-
-echo "== [I] Enable kubelet =="
-sudo systemctl enable --now kubelet || true
-
-echo "== [J] Quick versions =="
-kubeadm version || true
-kubelet --version || true
-kubectl version --client=true || true
-
-echo "✅ INSTALL_OK"
-EOS
-)
+REMOTE_INSTALL=$'set -Eeuo pipefail\n\
+export DEBIAN_FRONTEND=noninteractive\n\
+\n\
+echo "== [LAB FIX] Ensure /dev/disk/by-id exists (shim-signed expects it) ==" \n\
+sudo mkdir -p /dev/disk/by-id\n\
+ROOTDEV="$(findmnt -n -o SOURCE / || true)"\n\
+ROOTDEV_REAL="$(readlink -f "$ROOTDEV" 2>/dev/null || true)"\n\
+if [ -n "$ROOTDEV_REAL" ] && [ -e "$ROOTDEV_REAL" ]; then\n\
+  sudo ln -sf "$ROOTDEV_REAL" /dev/disk/by-id/lab-root\n\
+elif [ -e /dev/loop0 ]; then\n\
+  sudo ln -sf /dev/loop0 /dev/disk/by-id/lab-loop0\n\
+else\n\
+  sudo ln -sf /dev/null /dev/disk/by-id/lab-null\n\
+fi\n\
+sudo ls -l /dev/disk/by-id || true\n\
+\n\
+echo "== [LAB] dpkg recovery (best effort) ==" \n\
+sudo dpkg --configure -a || true\n\
+sudo apt-get -f install -y || true\n\
+\n\
+echo "== [A] Remove old Kubernetes repo entries (e.g. v1.28) ==" \n\
+sudo rm -f /etc/apt/sources.list.d/kubernetes.list\n\
+sudo rm -f /etc/apt/sources.list.d/*kubernetes*.list || true\n\
+sudo rm -f /etc/apt/trusted.gpg.d/*kubernetes* || true\n\
+\n\
+echo "== [B] Base packages (repo tooling) ==" \n\
+sudo apt-get update\n\
+sudo apt-get install -y ca-certificates curl gpg apt-transport-https\n\
+\n\
+echo "== [C] Configure Kubernetes repo ('"$K8S_REPO_MINOR"') ==" \n\
+sudo mkdir -p /etc/apt/keyrings\n\
+curl -fsSL https://pkgs.k8s.io/core:/stable:/'"$K8S_REPO_MINOR"'/deb/Release.key -o /tmp/k8s-release.key\n\
+sudo gpg --dearmor --batch --yes --no-tty -o /etc/apt/keyrings/kubernetes-apt-keyring.gpg /tmp/k8s-release.key\n\
+sudo chmod 0644 /etc/apt/keyrings/kubernetes-apt-keyring.gpg\n\
+echo "deb [signed-by=/etc/apt/keyrings/kubernetes-apt-keyring.gpg] https://pkgs.k8s.io/core:/stable:/'"$K8S_REPO_MINOR"'/deb/ /" | sudo tee /etc/apt/sources.list.d/kubernetes.list >/dev/null\n\
+\n\
+echo "== [D] apt-get update (should be clean now) ==" \n\
+sudo apt-get update\n\
+\n\
+echo "== [E] Install kubeadm/kubelet/kubectl/cri-tools ==" \n\
+sudo apt-get install -y kubeadm kubelet kubectl cri-tools\n\
+sudo apt-mark hold kubeadm kubelet kubectl || true\n\
+\n\
+echo "== [F] Disable swap (required by kubelet) ==" \n\
+sudo swapoff -a || true\n\
+sudo sed -i \'/ swap / s/^/#/\' /etc/fstab || true\n\
+\n\
+echo "== [G] Kernel modules ==" \n\
+sudo modprobe br_netfilter || true\n\
+sudo modprobe overlay || true\n\
+\n\
+echo "== [H] sysctl for Kubernetes networking ==" \n\
+sudo tee /etc/sysctl.d/99-kubernetes-cri.conf >/dev/null <<\'EOF\'\n\
+net.bridge.bridge-nf-call-iptables  = 1\n\
+net.bridge.bridge-nf-call-ip6tables = 1\n\
+net.ipv4.ip_forward                 = 1\n\
+EOF\n\
+sudo sysctl --system >/dev/null || true\n\
+\n\
+echo "== [I] Enable kubelet ==" \n\
+sudo systemctl enable --now kubelet || true\n\
+\n\
+echo "== [J] Quick versions ==" \n\
+kubeadm version || true\n\
+kubelet --version || true\n\
+kubectl version --client=true || true\n\
+\n\
+echo "✅ INSTALL_OK"\n'
 
 for n in "${NODES[@]}"; do
   ip="${n%%:*}"
   host="${n##*:}"
   echo
   echo "==================== NODE $host ($ip) ===================="
-  ssh_do "$ip" "bash -s" <<<"$REMOTE_INSTALL"
+  # Quote the remote script safely for bash -lc
+  ssh_do "$ip" "bash -lc $(printf %q "$REMOTE_INSTALL")"
 done
 
-###############################################################################
-# PHASE 3 – kubeadm init on kube-1
-###############################################################################
 echo
 echo "================================================="
 echo "🧠 PHASE 3 – kubeadm init (kube-1)"
 echo "================================================="
 
-ssh_do "$KUBE1_IP" "bash -lc '
-set -Eeuo pipefail
+REMOTE_INIT=$'set -Eeuo pipefail\n\
+if [ -f /etc/kubernetes/admin.conf ]; then\n\
+  echo "⚠️ kubeadm already initialized – skipping init"\n\
+else\n\
+  echo "Running kubeadm init (pod CIDR: '"$POD_CIDR"')"\n\
+  sudo kubeadm init --pod-network-cidr='"$POD_CIDR"'\n\
+fi\n'
 
-if [ -f /etc/kubernetes/admin.conf ]; then
-  echo "⚠️ kubeadm already initialized – skipping init"
-else
-  echo "Running kubeadm init (pod CIDR: ${POD_CIDR})"
-  sudo kubeadm init --pod-network-cidr=${POD_CIDR}
-fi
-'"
+ssh_do "$KUBE1_IP" "bash -lc $(printf %q "$REMOTE_INIT")"
 
-ssh_do "$KUBE1_IP" "bash -lc '
-set -Eeuo pipefail
-echo "Configuring kubectl for user ${USER}"
-mkdir -p /home/${USER}/.kube
-sudo cp -f /etc/kubernetes/admin.conf /home/${USER}/.kube/config
-sudo chown -R ${USER}:${USER} /home/${USER}/.kube
+REMOTE_KUBECONFIG=$'set -Eeuo pipefail\n\
+echo "Configuring kubectl for user '"$USER"'" \n\
+mkdir -p /home/'"$USER"'/.kube\n\
+sudo cp -f /etc/kubernetes/admin.conf /home/'"$USER"'/.kube/config\n\
+sudo chown -R '"$USER"':'"$USER"' /home/'"$USER"'/.kube\n\
+echo "Current node status (expect NotReady until CNI is installed):"\n\
+kubectl get nodes -o wide || true\n'
 
-echo "Current node status (expect NotReady until CNI is installed):"
-kubectl get nodes -o wide || true
-'"
+ssh_do "$KUBE1_IP" "bash -lc $(printf %q "$REMOTE_KUBECONFIG")"
 
-###############################################################################
-# PHASE 4 – Join kube-2/kube-3
-###############################################################################
 echo
 echo "================================================="
 echo "🧩 PHASE 4 – Join worker nodes"
@@ -267,91 +219,80 @@ echo "    ${JOIN_CMD}"
 echo
 
 for ip in "$KUBE2_IP" "$KUBE3_IP"; do
-  ssh_do "$ip" "bash -lc '
-set -Eeuo pipefail
-if [ -f /etc/kubernetes/kubelet.conf ]; then
-  echo "⚠️ Already joined – skipping"
-else
-  echo "Joining this node..."
-  sudo ${JOIN_CMD}
-fi
-'"
+  REMOTE_JOIN=$'set -Eeuo pipefail\n\
+if [ -f /etc/kubernetes/kubelet.conf ]; then\n\
+  echo "⚠️ Already joined – skipping"\n\
+else\n\
+  echo "Joining this node..."\n\
+  sudo '"$JOIN_CMD"'\n\
+fi\n'
+  ssh_do "$ip" "bash -lc $(printf %q "$REMOTE_JOIN")"
 done
 
-###############################################################################
-# PHASE 5 – Install Calico on kube-1
-###############################################################################
 echo
 echo "================================================="
 echo "🌐 PHASE 5 – Install Calico (kube-1)"
 echo "================================================="
 
-ssh_do "$KUBE1_IP" "bash -lc '
-set -Eeuo pipefail
-export KUBECONFIG=/etc/kubernetes/admin.conf
+REMOTE_CALICO=$'set -Eeuo pipefail\n\
+export KUBECONFIG=/etc/kubernetes/admin.conf\n\
+echo "Applying Tigera operator ('"$CALICO_VERSION"')"\n\
+kubectl apply -f https://raw.githubusercontent.com/projectcalico/calico/'"$CALICO_VERSION"'/manifests/tigera-operator.yaml\n\
+\n\
+echo "Applying Installation CR (pod CIDR: '"$POD_CIDR"')"\n\
+kubectl apply -f - <<\'EOF\'\n\
+apiVersion: operator.tigera.io/v1\n\
+kind: Installation\n\
+metadata:\n\
+  name: default\n\
+spec:\n\
+  calicoNetwork:\n\
+    ipPools:\n\
+    - cidr: '"$POD_CIDR"'\n\
+      blockSize: 26\n\
+      encapsulation: VXLAN\n\
+      natOutgoing: Enabled\n\
+      nodeSelector: all()\n\
+EOF\n\
+\n\
+echo "Pods snapshot:"\n\
+kubectl get pods -A -o wide || true\n'
 
-echo "Applying Tigera operator (${CALICO_VERSION})"
-kubectl apply -f https://raw.githubusercontent.com/projectcalico/calico/${CALICO_VERSION}/manifests/tigera-operator.yaml
+ssh_do "$KUBE1_IP" "bash -lc $(printf %q "$REMOTE_CALICO")"
 
-echo "Applying Installation CR (pod CIDR: ${POD_CIDR})"
-cat <<EOF | kubectl apply -f -
-apiVersion: operator.tigera.io/v1
-kind: Installation
-metadata:
-  name: default
-spec:
-  calicoNetwork:
-    ipPools:
-    - cidr: ${POD_CIDR}
-      blockSize: 26
-      encapsulation: VXLAN
-      natOutgoing: Enabled
-      nodeSelector: all()
-EOF
-
-echo "Pods snapshot:"
-kubectl get pods -A -o wide || true
-'"
-
-###############################################################################
-# PHASE 6 – Verify (wait for Ready)
-###############################################################################
 echo
 echo "================================================="
 echo "✅ PHASE 6 – Verification (kube-1)"
 echo "================================================="
 
-ssh_do "$KUBE1_IP" "bash -lc '
-set -Eeuo pipefail
-export KUBECONFIG=/etc/kubernetes/admin.conf
+REMOTE_VERIFY=$'set -Eeuo pipefail\n\
+export KUBECONFIG=/etc/kubernetes/admin.conf\n\
+echo "Waiting for calico-node DaemonSet to appear..."\n\
+for i in {1..60}; do\n\
+  kubectl get ds -A 2>/dev/null | grep -q "calico-node" && break\n\
+  sleep 5\n\
+done\n\
+kubectl get ds -A | grep -E "calico-node|NAME" || true\n\
+\n\
+echo "Waiting for all nodes Ready (max ~5 min)..." \n\
+for i in {1..60}; do\n\
+  notready=$(kubectl get nodes --no-headers 2>/dev/null | awk \'$2!="Ready"{c++} END{print c+0}\')\n\
+  if [ "$notready" -eq 0 ]; then\n\
+    echo "✅ All nodes are Ready"\n\
+    break\n\
+  fi\n\
+  echo "Still not ready nodes: $notready"\n\
+  kubectl get nodes -o wide || true\n\
+  sleep 5\n\
+done\n\
+\n\
+echo "--- FINAL STATUS (nodes) ---"\n\
+kubectl get nodes -o wide\n\
+echo\n\
+echo "--- FINAL STATUS (pods) ---"\n\
+kubectl get pods -A -o wide\n'
 
-echo "Waiting for calico-node DaemonSet to appear..."
-for i in {1..60}; do
-  kubectl get ds -A 2>/dev/null | grep -q "calico-node" && break
-  sleep 5
-done
-kubectl get ds -A | grep -E "calico-node|NAME" || true
-
-echo "Waiting for all nodes Ready (max ~5 min)..."
-for i in {1..60}; do
-  notready=\$(kubectl get nodes --no-headers 2>/dev/null | awk '\''$2!="Ready"{c++} END{print c+0}\'')
-  if [ "\$notready" -eq 0 ]; then
-    echo "✅ All nodes are Ready"
-    break
-  fi
-  echo "Still not ready nodes: \$notready"
-  kubectl get nodes -o wide || true
-  sleep 5
-done
-
-echo
-echo "--- FINAL STATUS (nodes) ---"
-kubectl get nodes -o wide
-
-echo
-echo "--- FINAL STATUS (pods) ---"
-kubectl get pods -A -o wide
-'"
+ssh_do "$KUBE1_IP" "bash -lc $(printf %q "$REMOTE_VERIFY")"
 
 echo
 echo "🎉 BOOTSTRAP COMPLETE"
