@@ -156,6 +156,15 @@ for n in "${NODES[@]}"; do
       'fi' \
       'sudo ls -l /dev/disk/by-id || true' \
       '' \
+      'echo "== [LAB FIX] Neutralize shim-signed postinst (EFI/ESP not present in LAB) == "' \
+      'POST=/var/lib/dpkg/info/shim-signed.postinst' \
+      'DIV=${POST}.real' \
+      'if [ ! -f "$DIV" ]; then' \
+      '  sudo dpkg-divert --add --rename --divert "$DIV" "$POST" || true' \
+      'fi' \
+      'printf "#!/bin/sh\n# LAB: skip EFI/ESP mount\nexit 0\n" | sudo tee "$POST" >/dev/null' \
+      'sudo chmod +x "$POST"' \
+      '' \
       'echo "== [LAB] dpkg recovery (best effort) == "' \
       'sudo dpkg --configure -a || true' \
       'sudo apt-get -f install -y || true' \
