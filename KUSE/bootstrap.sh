@@ -61,7 +61,7 @@ ssh_do() {
   echo "===================================================================="
   echo "➡️  [$ip] $*"
   echo "===================================================================="
-  sshpass -p "$PASS" ssh "${SSH_OPTS[@]}" "${USER}@${ip}" "$@"
+  sshpass -p "$PASS" ssh "${SSH_OPTS[@]}" "$$USER@${ip}" "$@"
 }
 
 ssh_bash_stdin() {
@@ -72,7 +72,7 @@ ssh_bash_stdin() {
   echo "➡️  [$ip] bash -se  (remote script via stdin)"
   echo "===================================================================="
   # Feed script via a pipe so stdin closes -> remote bash exits -> no interactive prompt.
-  printf '%s' "$content" | sshpass -p "$PASS" ssh "${SSH_OPTS[@]}" "${USER}@${ip}" "bash -se"
+  printf '%s' "$content" | sshpass -p "$PASS" ssh "${SSH_OPTS[@]}" "$$USER@${ip}" "bash -se"
 }
 
 ###############################################################################
@@ -241,10 +241,10 @@ ssh_bash_stdin "$KUBE1_IP" "$REMOTE_INIT_SCRIPT"
 REMOTE_KUBECONFIG_SCRIPT=$(
   printf '%s\n' \
     'set -Eeuo pipefail' \
-    'echo "Configuring kubectl for user {USER}"' \
-    'mkdir -p /home/{USER}/.kube' \
-    'sudo cp -f /etc/kubernetes/admin.conf /home/{USER}/.kube/config' \
-    'sudo chown -R {USER}:{USER} /home/{USER}/.kube' \
+    'echo "Configuring kubectl for current SSH user ($USER)"' \
+    'mkdir -p $HOME/.kube' \
+    'sudo cp -f /etc/kubernetes/admin.conf $HOME/.kube/config' \
+    'sudo chown -R $USER:$USER $HOME/.kube' \
     'echo "Current node status (expect NotReady until CNI is installed):"' \
     'kubectl get nodes -o wide || true'
 )
@@ -258,7 +258,7 @@ echo "================================================="
 echo "🧩 PHASE 4 – Join worker nodes"
 echo "================================================="
 
-JOIN_CMD="$(sshpass -p "$PASS" ssh "${SSH_OPTS[@]}" "${USER}@${KUBE1_IP}" "sudo kubeadm token create --print-join-command" | tr -d '\r' | tail -n 1)"
+JOIN_CMD="$(sshpass -p "$PASS" ssh "${SSH_OPTS[@]}" "$$USER@${KUBE1_IP}" "sudo kubeadm token create --print-join-command" | tr -d '\r' | tail -n 1)"
 if [[ -z "${JOIN_CMD}" ]]; then
   echo "ERROR: Could not obtain join command from kube-1" >&2
   exit 1
@@ -352,4 +352,4 @@ ssh_bash_stdin "$KUBE1_IP" "$REMOTE_VERIFY_SCRIPT"
 
 echo
 echo "🎉 BOOTSTRAP COMPLETE"
-echo "Next: ssh ${USER}@${KUBE1_IP} and run: kubectl get pods -A"
+echo "Next: ssh $$USER@${KUBE1_IP} and run: kubectl get pods -A"
