@@ -190,7 +190,6 @@ for n in "${NODES[@]}"; do
     'sudo rm -f /etc/apt/sources.list.d/kubernetes.list /etc/apt/sources.list.d/*kubernetes*.list || true' \
     'sudo rm -f /etc/apt/trusted.gpg.d/*kubernetes* || true' \
     'sudo mkdir -p /etc/apt/keyrings' \
-    # Key fetch with safe fallback (no '||' tokenization issues)
     'curl -fsSL --retry 3 --retry-delay 1 https://pkgs.k8s.io/core:/stable:/v1.32/deb/Release.key -o /tmp/k8s-release.key || true' \
     'test -s /tmp/k8s-release.key || curl -fsSL --retry 3 --retry-delay 1 https://prod-cdn.packages.k8s.io/repositories/isv:/kubernetes:/core:/stable:/v1.32/deb/Release.key -o /tmp/k8s-release.key' \
     'sudo gpg --dearmor --batch --yes --no-tty -o /etc/apt/keyrings/kubernetes-apt-keyring.gpg /tmp/k8s-release.key' \
