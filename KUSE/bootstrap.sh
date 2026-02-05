@@ -18,8 +18,26 @@ set -Eeuo pipefail
 ###############################################################################
 
 read -rp "SSH Username: " USER
-read -rsp "SSH Password: " PASS
-echo
+
+# Allow passing PASS via environment for non-interactive runs: PASS="..." bash script.sh
+if [[ -z "${PASS:-}" ]]; then
+  read -rsp "SSH Password: " PASS1; echo
+  read -rsp "SSH Password (repeat): " PASS2; echo
+  if [[ -z "$PASS1" ]]; then
+    echo "ERROR: Empty password entered. Please re-run and type the password (input is hidden)." >&2
+    exit 1
+  fi
+  if [[ "$PASS1" != "$PASS2" ]]; then
+    echo "ERROR: Passwords do not match. Please re-run." >&2
+    exit 1
+  fi
+  PASS="$PASS1"
+  unset PASS1 PASS2
+else
+  echo "(Using SSH password from environment PASS)"
+fi
+echo "PASSLEN=${#PASS}"
+
 
 KUBE1_IP="10.0.0.101"
 KUBE2_IP="10.0.0.102"
