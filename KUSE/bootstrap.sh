@@ -62,7 +62,22 @@ for cmd in ssh sshpass base64; do
 done
 
 # NOTE: -t (single) allocates a tty, but does not "force" it as aggressively as -tt.
-SSH_OPTS=(
+SSH_AUTH_OPTS=(
+  -o PreferredAuthentications=password,keyboard-interactive
+  -o PubkeyAuthentication=no
+  -o KbdInteractiveAuthentication=yes
+  -o NumberOfPasswordPrompts=1
+)
+
+# For debconf/postinst we need a TTY later, but for simple connectivity checks
+# a TTY can trigger keyboard-interactive flows that sshpass may not catch in some labs.
+SSH_OPTS_NO_TTY=(
+  -o StrictHostKeyChecking=no
+  -o UserKnownHostsFile=/dev/null
+  -o LogLevel=ERROR
+)
+
+SSH_OPTS_TTY=(
   -t
   -o StrictHostKeyChecking=no
   -o UserKnownHostsFile=/dev/null
@@ -102,7 +117,7 @@ echo "🚀 PHASE 0 – SSH Connectivity"
 echo "================================================="
 for n in "${NODES[@]}"; do
   ip="${n%%:*}"
-  ssh_do "$ip" "echo Connected to \$(hostname) as \$(whoami)"
+  ssh_do_notty "$ip" "echo Connected to \$(hostname) as \$(whoami)"
 done
 
 ###############################################################################
