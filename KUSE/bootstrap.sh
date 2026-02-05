@@ -307,12 +307,11 @@ CALICO_B64="$(b64 "$CALICO_INSTALL_YAML")"
 
 REMOTE_CALICO_SCRIPT="$(printf '%s\n' \
   'set -Eeuo pipefail' \
-  'export KUBECONFIG=/etc/kubernetes/admin.conf' \
-  "echo \"Applying Tigera operator (${CALICO_VERSION})\"" \
-  "kubectl apply -f https://raw.githubusercontent.com/projectcalico/calico/${CALICO_VERSION}/manifests/tigera-operator.yaml" \
+    "echo \"Applying Tigera operator (${CALICO_VERSION})\"" \
+  "sudo env KUBECONFIG=/etc/kubernetes/admin.conf kubectl apply -f https://raw.githubusercontent.com/projectcalico/calico/${CALICO_VERSION}/manifests/tigera-operator.yaml" \
   "echo \"Applying Installation CR (pod CIDR: ${POD_CIDR})\"" \
   "echo \"${CALICO_B64}\" | base64 -d | kubectl apply -f -" \
-  'kubectl get pods -A -o wide || true' \
+  'sudo env KUBECONFIG=/etc/kubernetes/admin.conf kubectl get pods -A -o wide || true' \
 )"
 ssh_bash_tty "$KUBE1_IP" "$REMOTE_CALICO_SCRIPT"
 
@@ -324,8 +323,7 @@ echo "================================================="
 
 REMOTE_VERIFY_SCRIPT="$(printf '%s\n' \
   'set -Eeuo pipefail' \
-  'export KUBECONFIG=/etc/kubernetes/admin.conf' \
-  'echo "Waiting for calico-node DaemonSet to appear..."' \
+    'echo "Waiting for calico-node DaemonSet to appear..."' \
   'for i in {1..60}; do kubectl get ds -A 2>/dev/null | grep -q "calico-node" && break; sleep 5; done' \
   'kubectl get ds -A | grep -E "calico-node|NAME" || true' \
   'echo "Waiting for all nodes Ready (max ~5 min)..."' \
