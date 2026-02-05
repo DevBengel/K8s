@@ -183,7 +183,7 @@ for n in "${NODES[@]}"; do
       'curl -fsSL https://pkgs.k8s.io/core:/stable:/v1.32/deb/Release.key -o /tmp/k8s-release.key || curl -fsSL https://prod-cdn.packages.k8s.io/repositories/isv:/kubernetes:/core:/stable:/v1.32/deb/Release.key -o /tmp/k8s-release.key' \
       'sudo gpg --dearmor --batch --yes --no-tty -o /etc/apt/keyrings/kubernetes-apt-keyring.gpg /tmp/k8s-release.key' \
       'sudo chmod 0644 /etc/apt/keyrings/kubernetes-apt-keyring.gpg' \
-      'echo "deb [signed-by=/etc/apt/keyrings/kubernetes-apt-keyring.gpg] https://pkgs.k8s.io/core:/stable:/{K8S_REPO_MINOR}/deb/ /" | sudo tee /etc/apt/sources.list.d/kubernetes.list >/dev/null' \
+      'echo "deb [signed-by=/etc/apt/keyrings/kubernetes-apt-keyring.gpg] https://pkgs.k8s.io/core:/stable:/v1.32/deb/ /" | sudo tee /etc/apt/sources.list.d/kubernetes.list >/dev/null' \
       '' \
       'echo "== [D] apt-get update (should be clean now) == "' \
       'sudo apt-get update' \
