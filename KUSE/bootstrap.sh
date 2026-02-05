@@ -180,10 +180,10 @@ for n in "${NODES[@]}"; do
       '' \
       "echo \"== [C] Configure Kubernetes repo (${K8S_REPO_MINOR}) == \"" \
       'sudo mkdir -p /etc/apt/keyrings' \
-      f'curl -fsSL https://pkgs.k8s.io/core:/stable:/{K8S_REPO_MINOR}/deb/Release.key -o /tmp/k8s-release.key' \
+      'curl -fsSL https://pkgs.k8s.io/core:/stable:/{K8S_REPO_MINOR}/deb/Release.key -o /tmp/k8s-release.key' \
       'sudo gpg --dearmor --batch --yes --no-tty -o /etc/apt/keyrings/kubernetes-apt-keyring.gpg /tmp/k8s-release.key' \
       'sudo chmod 0644 /etc/apt/keyrings/kubernetes-apt-keyring.gpg' \
-      f'echo "deb [signed-by=/etc/apt/keyrings/kubernetes-apt-keyring.gpg] https://pkgs.k8s.io/core:/stable:/{K8S_REPO_MINOR}/deb/ /" | sudo tee /etc/apt/sources.list.d/kubernetes.list >/dev/null' \
+      'echo "deb [signed-by=/etc/apt/keyrings/kubernetes-apt-keyring.gpg] https://pkgs.k8s.io/core:/stable:/{K8S_REPO_MINOR}/deb/ /" | sudo tee /etc/apt/sources.list.d/kubernetes.list >/dev/null' \
       '' \
       'echo "== [D] apt-get update (should be clean now) == "' \
       'sudo apt-get update' \
@@ -232,8 +232,8 @@ REMOTE_INIT_SCRIPT=$(
     'if [ -f /etc/kubernetes/admin.conf ]; then' \
     '  echo "⚠️ kubeadm already initialized – skipping init"' \
     'else' \
-    f'  echo "Running kubeadm init (pod CIDR: {POD_CIDR})"' \
-    f'  sudo kubeadm init --pod-network-cidr={POD_CIDR}' \
+    '  echo "Running kubeadm init (pod CIDR: {POD_CIDR})"' \
+    '  sudo kubeadm init --pod-network-cidr={POD_CIDR}' \
     'fi'
 )
 ssh_bash_stdin "$KUBE1_IP" "$REMOTE_INIT_SCRIPT"
@@ -241,10 +241,10 @@ ssh_bash_stdin "$KUBE1_IP" "$REMOTE_INIT_SCRIPT"
 REMOTE_KUBECONFIG_SCRIPT=$(
   printf '%s\n' \
     'set -Eeuo pipefail' \
-    f'echo "Configuring kubectl for user {USER}"' \
-    f'mkdir -p /home/{USER}/.kube' \
-    f'sudo cp -f /etc/kubernetes/admin.conf /home/{USER}/.kube/config' \
-    f'sudo chown -R {USER}:{USER} /home/{USER}/.kube' \
+    'echo "Configuring kubectl for user {USER}"' \
+    'mkdir -p /home/{USER}/.kube' \
+    'sudo cp -f /etc/kubernetes/admin.conf /home/{USER}/.kube/config' \
+    'sudo chown -R {USER}:{USER} /home/{USER}/.kube' \
     'echo "Current node status (expect NotReady until CNI is installed):"' \
     'kubectl get nodes -o wide || true'
 )
@@ -311,11 +311,11 @@ REMOTE_CALICO_SCRIPT=$(
     'set -Eeuo pipefail' \
     'export KUBECONFIG=/etc/kubernetes/admin.conf' \
     '' \
-    f'echo "Applying Tigera operator ({CALICO_VERSION})"' \
-    f'kubectl apply -f https://raw.githubusercontent.com/projectcalico/calico/{CALICO_VERSION}/manifests/tigera-operator.yaml' \
+    'echo "Applying Tigera operator ({CALICO_VERSION})"' \
+    'kubectl apply -f https://raw.githubusercontent.com/projectcalico/calico/{CALICO_VERSION}/manifests/tigera-operator.yaml' \
     '' \
-    f'echo "Applying Installation CR (pod CIDR: {POD_CIDR})"' \
-    f'echo "{CALICO_B64}" | base64 -d | kubectl apply -f -' \
+    'echo "Applying Installation CR (pod CIDR: {POD_CIDR})"' \
+    'echo "{CALICO_B64}" | base64 -d | kubectl apply -f -' \
     '' \
     'echo "Pods snapshot:"' \
     'kubectl get pods -A -o wide || true'
