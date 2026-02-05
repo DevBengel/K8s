@@ -309,6 +309,11 @@ REMOTE_CALICO_SCRIPT="$(printf '%s\n' \
   'set -Eeuo pipefail' \
     "echo \"Applying Tigera operator (${CALICO_VERSION})\"" \
   "sudo env KUBECONFIG=/etc/kubernetes/admin.conf kubectl apply -f https://raw.githubusercontent.com/projectcalico/calico/${CALICO_VERSION}/manifests/tigera-operator.yaml" \
+  'echo "Waiting for tigera-operator deployment to be Available..."' \
+  'sudo env KUBECONFIG=/etc/kubernetes/admin.conf kubectl -n tigera-operator rollout status deploy/tigera-operator --timeout=180s || true' \
+  'echo "Waiting for CRD installations.operator.tigera.io ..."' \
+  'for i in {1..120}; do sudo env KUBECONFIG=/etc/kubernetes/admin.conf kubectl get crd installations.operator.tigera.io >/dev/null 2>&1 && break; sleep 2; done' \
+  'sudo env KUBECONFIG=/etc/kubernetes/admin.conf kubectl get crd installations.operator.tigera.io >/dev/null 2>&1 || { echo "ERROR: CRD installations.operator.tigera.io not ready"; exit 1; }' \
   "echo \"Applying Installation CR (pod CIDR: ${POD_CIDR})\"" \
   "echo \"${CALICO_B64}\" | base64 -d | kubectl apply -f -" \
   'sudo env KUBECONFIG=/etc/kubernetes/admin.conf kubectl get pods -A -o wide || true' \
