@@ -232,8 +232,8 @@ REMOTE_INIT_SCRIPT=$(
     'if [ -f /etc/kubernetes/admin.conf ]; then' \
     '  echo "⚠️ kubeadm already initialized – skipping init"' \
     'else' \
-    '  echo "Running kubeadm init (pod CIDR: {POD_CIDR})"' \
-    '  sudo kubeadm init --pod-network-cidr={POD_CIDR}' \
+    '  echo "Running kubeadm init (pod CIDR: 192.168.0.0/16)"' \
+    '  sudo kubeadm init --pod-network-cidr=192.168.0.0/16' \
     'fi'
 )
 ssh_bash_stdin "$KUBE1_IP" "$REMOTE_INIT_SCRIPT"
@@ -298,7 +298,7 @@ metadata:
 spec:
   calicoNetwork:
     ipPools:
-    - cidr: ${POD_CIDR}
+    - cidr: $192.168.0.0/16
       blockSize: 26
       encapsulation: VXLAN
       natOutgoing: Enabled
@@ -314,7 +314,7 @@ REMOTE_CALICO_SCRIPT=$(
     'echo "Applying Tigera operator ({CALICO_VERSION})"' \
     'kubectl apply -f https://raw.githubusercontent.com/projectcalico/calico/{CALICO_VERSION}/manifests/tigera-operator.yaml' \
     '' \
-    'echo "Applying Installation CR (pod CIDR: {POD_CIDR})"' \
+    'echo "Applying Installation CR (pod CIDR: 192.168.0.0/16)"' \
     'echo "{CALICO_B64}" | base64 -d | kubectl apply -f -' \
     '' \
     'echo "Pods snapshot:"' \
