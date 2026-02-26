@@ -43,3 +43,9 @@ hash -r
 which kubectl
 kubectl version --client
 ```
+
+```sh
+mkdir -p ~/.kube
+sudo cp /etc/kubernetes/admin.conf ~/.kube/config
+```
+sudo chown $USER:$USER ~/.kube/config
