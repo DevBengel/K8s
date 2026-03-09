@@ -14,6 +14,7 @@ set -Eeuo pipefail
 # - Optionaler Stable-Modus
 # - pkgs.k8s.io Minor-Repo wird aus der K8s-Version abgeleitet
 # - Repo-Keyring wird bei jedem Lauf frisch aufgebaut
+# - Alte Kubernetes-APT-Quellen werden hart entfernt (inkl. v1.28-Altlasten)
 # - APT/DPKG-Lock-Handling für unattended-upgrades
 # - Installiert/konfiguriert containerd (SystemdCgroup=true)
 # - Idempotenteres /etc/hosts
@@ -312,6 +313,8 @@ for n in "${NODES[@]}"; do
     '' \
     'echo "== [E] Kubernetes repo ('"${K8S_REPO_MINOR}"') =="' \
     'sudo rm -f /etc/apt/sources.list.d/kubernetes.list /etc/apt/sources.list.d/*kubernetes*.list || true' \
+    'sudo find /etc/apt/sources.list.d -maxdepth 1 -type f -name "*kubernetes*" -delete 2>/dev/null || true' \
+    'sudo sed -i "/pkgs.k8s.io/d;/prod-cdn.packages.k8s.io/d;/isv:\/kubernetes/d" /etc/apt/sources.list 2>/dev/null || true' \
     'sudo rm -f /etc/apt/keyrings/kubernetes-apt-keyring.gpg || true' \
     'sudo rm -f /etc/apt/trusted.gpg.d/*kubernetes* || true' \
     'sudo mkdir -p /etc/apt/keyrings' \
@@ -319,6 +322,8 @@ for n in "${NODES[@]}"; do
     'test -s /etc/apt/keyrings/kubernetes-apt-keyring.gpg' \
     'sudo chmod 0644 /etc/apt/keyrings/kubernetes-apt-keyring.gpg' \
     "echo \"deb [signed-by=/etc/apt/keyrings/kubernetes-apt-keyring.gpg] https://pkgs.k8s.io/core:/stable:/${K8S_REPO_MINOR}/deb/ /\" | sudo tee /etc/apt/sources.list.d/kubernetes.list >/dev/null" \
+    'echo "--- Kubernetes repo after cleanup ---"' \
+    'sudo grep -R "pkgs.k8s.io\|prod-cdn.packages.k8s.io\|isv:/kubernetes" /etc/apt/sources.list /etc/apt/sources.list.d/* 2>/dev/null || true' \
     'sudo apt-get clean' \
     'sudo rm -rf /var/lib/apt/lists/*' \
     'wait_for_apt' \
