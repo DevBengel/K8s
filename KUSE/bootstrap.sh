@@ -134,7 +134,9 @@ SSH_AUTH_OPTS=(
 SSH_NO_TTY=( "${SSH_AUTH_OPTS[@]}" )
 SSH_TTY=( "${SSH_AUTH_OPTS[@]}" -t )
 
-b64() { printf "%s" "$1" | base64 -w 0 2>/dev/null || printf "%s" "$1" | base64 | tr -d '\n'; }
+b64() {
+  printf "%s" "$1" | base64 -w 0 2>/dev/null || printf "%s" "$1" | base64 | tr -d '\n'
+}
 
 ssh_exec() {
   local ip="$1"; shift
@@ -189,11 +191,11 @@ for n in "${NODES[@]}"; do
     '' \
     'echo "Refreshing /etc/hosts kubernetes block idempotently"' \
     'TMPF="$(mktemp)"' \
-    'sudo cp /etc/hosts "$TMPF"' \
-    'sudo sed -i "/# BEGIN KUBERNETES CLUSTER/,/# END KUBERNETES CLUSTER/d" "$TMPF"' \
-    'printf "\n# BEGIN KUBERNETES CLUSTER\n" | sudo tee -a "$TMPF" >/dev/null' \
-    "echo \"${HOSTS_B64}\" | base64 -d | sudo tee -a \"$TMPF\" >/dev/null" \
-    'printf "\n# END KUBERNETES CLUSTER\n" | sudo tee -a "$TMPF" >/dev/null' \
+    'cp /etc/hosts "$TMPF"' \
+    'sed -i "/# BEGIN KUBERNETES CLUSTER/,/# END KUBERNETES CLUSTER/d" "$TMPF"' \
+    'printf "\n# BEGIN KUBERNETES CLUSTER\n" >> "$TMPF"' \
+    "echo \"${HOSTS_B64}\" | base64 -d >> \"\$TMPF\"" \
+    'printf "\n# END KUBERNETES CLUSTER\n" >> "$TMPF"' \
     'sudo cp "$TMPF" /etc/hosts' \
     'rm -f "$TMPF"' \
     '' \
@@ -223,20 +225,20 @@ for n in "${NODES[@]}"; do
     'set -Eeuo pipefail' \
     'export DEBIAN_FRONTEND=noninteractive' \
     '' \
-    'echo "== [LAB FIX] /dev/disk/by-id ==" ' \
+    'echo "== [LAB FIX] /dev/disk/by-id =="' \
     'sudo mkdir -p /dev/disk/by-id' \
     'ROOTDEV="$(findmnt -n -o SOURCE / || true)"' \
     'ROOTDEV_REAL="$(readlink -f "$ROOTDEV" 2>/dev/null || true)"' \
     'if [ -n "$ROOTDEV_REAL" ] && [ -e "$ROOTDEV_REAL" ]; then sudo ln -sf "$ROOTDEV_REAL" /dev/disk/by-id/lab-root; fi' \
     'sudo ls -l /dev/disk/by-id || true' \
     '' \
-    'echo "== [LAB FIX] shim-signed postinst (EFI/ESP missing in LAB) ==" ' \
+    'echo "== [LAB FIX] shim-signed postinst (EFI/ESP missing in LAB) =="' \
     'POST=/var/lib/dpkg/info/shim-signed.postinst' \
     'DIV=${POST}.real' \
     'if [ -f "$POST" ] && [ ! -f "$DIV" ]; then sudo dpkg-divert --add --rename --divert "$DIV" "$POST" || true; fi' \
     'if [ -f "$POST" ]; then printf "#!/bin/sh\n# LAB: skip EFI/ESP mount\nexit 0\n" | sudo tee "$POST" >/dev/null; sudo chmod +x "$POST"; fi' \
     '' \
-    'echo "== [A] Reset stale cluster state (optional) ==" ' \
+    'echo "== [A] Reset stale cluster state (optional) =="' \
     "if [ \"${RESET_CLUSTER}\" = \"yes\" ]; then" \
     '  echo "RESET_CLUSTER=yes -> cleaning previous kubeadm state"' \
     '  sudo kubeadm reset -f || true' \
@@ -255,15 +257,15 @@ for n in "${NODES[@]}"; do
     '  sudo iptables -X || true' \
     'fi' \
     '' \
-    'echo "== [B] dpkg recovery ==" ' \
+    'echo "== [B] dpkg recovery =="' \
     'sudo dpkg --configure -a || true' \
     'sudo apt-get -f install -y || true' \
     '' \
-    'echo "== [C] Base packages ==" ' \
+    'echo "== [C] Base packages =="' \
     'sudo apt-get update' \
     'sudo apt-get install -y ca-certificates curl gpg apt-transport-https software-properties-common' \
     '' \
-    'echo "== [D] Disable APT proxy for Kubernetes repos (DIRECT) ==" ' \
+    'echo "== [D] Disable APT proxy for Kubernetes repos (DIRECT) =="' \
     'sudo tee /etc/apt/apt.conf.d/99-k8s-direct >/dev/null <<EOF' \
     'Acquire::http::Proxy::pkgs.k8s.io "DIRECT";' \
     'Acquire::https::Proxy::pkgs.k8s.io "DIRECT";' \
@@ -273,31 +275,31 @@ for n in "${NODES[@]}"; do
     'Acquire::https::Proxy::dl.k8s.io "DIRECT";' \
     'EOF' \
     '' \
-    "echo \"== [E] Kubernetes repo (${K8S_REPO_MINOR}) ==\" " \
+    "echo \"== [E] Kubernetes repo (${K8S_REPO_MINOR}) ==\"" \
     'sudo rm -f /etc/apt/sources.list.d/kubernetes.list /etc/apt/sources.list.d/*kubernetes*.list || true' \
     'sudo rm -f /etc/apt/trusted.gpg.d/*kubernetes* || true' \
     'sudo mkdir -p /etc/apt/keyrings' \
     "curl -fsSL --retry 3 --retry-delay 1 https://pkgs.k8s.io/core:/stable:/${K8S_REPO_MINOR}/deb/Release.key -o /tmp/k8s-release.key || true" \
-    'test -s /tmp/k8s-release.key || ' \
+    'test -s /tmp/k8s-release.key ||' \
     "curl -fsSL --retry 3 --retry-delay 1 https://prod-cdn.packages.k8s.io/repositories/isv:/kubernetes:/core:/stable:/${K8S_REPO_MINOR}/deb/Release.key -o /tmp/k8s-release.key" \
     'sudo gpg --dearmor --batch --yes --no-tty -o /etc/apt/keyrings/kubernetes-apt-keyring.gpg /tmp/k8s-release.key' \
     'sudo chmod 0644 /etc/apt/keyrings/kubernetes-apt-keyring.gpg' \
     "echo \"deb [signed-by=/etc/apt/keyrings/kubernetes-apt-keyring.gpg] https://pkgs.k8s.io/core:/stable:/${K8S_REPO_MINOR}/deb/ /\" | sudo tee /etc/apt/sources.list.d/kubernetes.list >/dev/null" \
     '' \
-    'echo "== [F] Disable swap ==" ' \
+    'echo "== [F] Disable swap =="' \
     'sudo swapoff -a || true' \
     "sudo sed -i '/^[^#].*\\sswap\\s/s/^/#/' /etc/fstab || true" \
     '' \
-    'echo "== [G] Kernel modules ==" ' \
+    'echo "== [G] Kernel modules =="' \
     'sudo modprobe overlay || true' \
     'sudo modprobe br_netfilter || true' \
     'printf "overlay\nbr_netfilter\n" | sudo tee /etc/modules-load.d/k8s.conf >/dev/null' \
     '' \
-    'echo "== [H] sysctl ==" ' \
+    'echo "== [H] sysctl =="' \
     "printf 'net.bridge.bridge-nf-call-iptables = 1\nnet.bridge.bridge-nf-call-ip6tables = 1\nnet.ipv4.ip_forward = 1\n' | sudo tee /etc/sysctl.d/99-kubernetes-cri.conf >/dev/null" \
     'sudo sysctl --system >/dev/null || true' \
     '' \
-    'echo "== [I] Install containerd ==" ' \
+    'echo "== [I] Install containerd =="' \
     'sudo apt-get update' \
     'sudo apt-get install -y containerd' \
     'sudo mkdir -p /etc/containerd' \
@@ -308,16 +310,16 @@ for n in "${NODES[@]}"; do
     'sudo systemctl enable --now containerd' \
     'sudo systemctl restart containerd' \
     '' \
-    'echo "== [J] Install Kubernetes packages ==" ' \
+    'echo "== [J] Install Kubernetes packages =="' \
     'sudo apt-get update' \
     'sudo apt-get install -y kubeadm kubelet kubectl cri-tools' \
     'sudo apt-mark hold kubeadm kubelet kubectl || true' \
     '' \
-    'echo "== [K] Enable kubelet ==" ' \
+    'echo "== [K] Enable kubelet =="' \
     'sudo systemctl enable kubelet || true' \
     'sudo systemctl restart kubelet || true' \
     '' \
-    'echo "== [L] Preflight checks ==" ' \
+    'echo "== [L] Preflight checks =="' \
     'echo "-- swap --"' \
     'swapon --show || true' \
     'echo "-- br_netfilter --"' \
@@ -330,7 +332,7 @@ for n in "${NODES[@]}"; do
     'sudo systemctl is-enabled kubelet || true' \
     'sudo systemctl is-active kubelet || true' \
     '' \
-    'echo "== [M] Versions ==" ' \
+    'echo "== [M] Versions =="' \
     'kubeadm version || true' \
     'kubelet --version || true' \
     'kubectl version --client=true || true' \
@@ -379,8 +381,10 @@ echo "================================================="
 echo "🧩 PHASE 4 – Join worker nodes"
 echo "================================================="
 
-JOIN_CMD="$(sshpass -p "$PASS" ssh "${SSH_NO_TTY[@]}" "${USER}@${KUBE1_IP}" \
-  "sudo kubeadm token create --print-join-command --ttl 2h" | tr -d '\r' | tail -n 1)"
+JOIN_CMD="$(
+  sshpass -p "$PASS" ssh "${SSH_NO_TTY[@]}" "${USER}@${KUBE1_IP}" \
+    "sudo kubeadm token create --print-join-command --ttl 2h" | tr -d '\r' | tail -n 1
+)"
 
 if [[ -z "${JOIN_CMD}" ]]; then
   echo "ERROR: Could not obtain join command from kube-1" >&2
