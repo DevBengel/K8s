@@ -433,17 +433,16 @@ CALICO_B64="$(b64 "$CALICO_INSTALL_YAML")"
 
 REMOTE_CALICO_SCRIPT="$(printf '%s\n' \
   'set -Eeuo pipefail' \
-  'export KUBECONFIG=/etc/kubernetes/admin.conf' \
   "echo \"Applying Tigera operator (${CALICO_VERSION})\"" \
-  "kubectl apply -f https://raw.githubusercontent.com/projectcalico/calico/${CALICO_VERSION}/manifests/tigera-operator.yaml" \
+  "sudo env KUBECONFIG=/etc/kubernetes/admin.conf kubectl apply -f https://raw.githubusercontent.com/projectcalico/calico/${CALICO_VERSION}/manifests/tigera-operator.yaml" \
   'echo "Waiting for tigera-operator deployment to be Available..."' \
-  'kubectl -n tigera-operator rollout status deploy/tigera-operator --timeout=180s' \
+  'sudo env KUBECONFIG=/etc/kubernetes/admin.conf kubectl -n tigera-operator rollout status deploy/tigera-operator --timeout=180s' \
   'echo "Waiting for CRD installations.operator.tigera.io ..."' \
-  'for i in {1..120}; do kubectl get crd installations.operator.tigera.io >/dev/null 2>&1 && break; sleep 2; done' \
-  'kubectl get crd installations.operator.tigera.io >/dev/null 2>&1 || { echo "ERROR: CRD installations.operator.tigera.io not ready"; exit 1; }' \
+  'for i in {1..120}; do sudo env KUBECONFIG=/etc/kubernetes/admin.conf kubectl get crd installations.operator.tigera.io >/dev/null 2>&1 && break; sleep 2; done' \
+  'sudo env KUBECONFIG=/etc/kubernetes/admin.conf kubectl get crd installations.operator.tigera.io >/dev/null 2>&1 || { echo "ERROR: CRD installations.operator.tigera.io not ready"; exit 1; }' \
   "echo \"Applying Installation CR (pod CIDR: ${POD_CIDR})\"" \
-  "echo \"${CALICO_B64}\" | base64 -d | kubectl apply -f -" \
-  'kubectl get pods -A -o wide || true' \
+  "echo \"${CALICO_B64}\" | base64 -d | sudo env KUBECONFIG=/etc/kubernetes/admin.conf kubectl apply -f -" \
+  'sudo env KUBECONFIG=/etc/kubernetes/admin.conf kubectl get pods -A -o wide || true' \
 )"
 ssh_bash_tty "$KUBE1_IP" "$REMOTE_CALICO_SCRIPT"
 
@@ -455,16 +454,15 @@ echo "================================================="
 
 REMOTE_VERIFY_SCRIPT="$(printf '%s\n' \
   'set -Eeuo pipefail' \
-  'export KUBECONFIG=/etc/kubernetes/admin.conf' \
   'echo "Waiting for calico-node DaemonSet to appear..."' \
-  'for i in {1..60}; do kubectl get ds -A 2>/dev/null | grep -q "calico-node" && break; sleep 5; done' \
-  'kubectl get ds -A | grep -E "calico-node|NAME" || true' \
+  'for i in {1..60}; do sudo env KUBECONFIG=/etc/kubernetes/admin.conf kubectl get ds -A 2>/dev/null | grep -q "calico-node" && break; sleep 5; done' \
+  'sudo env KUBECONFIG=/etc/kubernetes/admin.conf kubectl get ds -A | grep -E "calico-node|NAME" || true' \
   'echo "Waiting for all nodes Ready (max ~5 min)..."' \
-  'for i in {1..60}; do notready=$(kubectl get nodes --no-headers 2>/dev/null | awk '\''$2!="Ready"{c++} END{print c+0}'\''); if [ "$notready" -eq 0 ]; then echo "✅ All nodes are Ready"; break; fi; echo "Still not ready nodes: $notready"; kubectl get nodes -o wide || true; sleep 5; done' \
+  'for i in {1..60}; do notready=$(sudo env KUBECONFIG=/etc/kubernetes/admin.conf kubectl get nodes --no-headers 2>/dev/null | awk '\''$2!="Ready"{c++} END{print c+0}'\''); if [ "$notready" -eq 0 ]; then echo "✅ All nodes are Ready"; break; fi; echo "Still not ready nodes: $notready"; sudo env KUBECONFIG=/etc/kubernetes/admin.conf kubectl get nodes -o wide || true; sleep 5; done' \
   'echo "--- FINAL STATUS (nodes) ---"' \
-  'kubectl get nodes -o wide' \
+  'sudo env KUBECONFIG=/etc/kubernetes/admin.conf kubectl get nodes -o wide' \
   'echo "--- FINAL STATUS (pods) ---"' \
-  'kubectl get pods -A -o wide' \
+  'sudo env KUBECONFIG=/etc/kubernetes/admin.conf kubectl get pods -A -o wide' \
 )"
 ssh_bash_tty "$KUBE1_IP" "$REMOTE_VERIFY_SCRIPT"
 
