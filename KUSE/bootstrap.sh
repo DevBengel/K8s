@@ -303,9 +303,7 @@ for n in "${NODES[@]}"; do
     'sudo apt-get update' \
     'sudo apt-get install -y containerd' \
     'sudo mkdir -p /etc/containerd' \
-    'containerd config default | sudo tee /etc/containerd/config.toml.new >/dev/null' \
-    'sudo sed "s/SystemdCgroup = false/SystemdCgroup = true/" /etc/containerd/config.toml.new | sudo tee /etc/containerd/config.toml >/dev/null' \
-    'rm -f /etc/containerd/config.toml.new' \
+    'containerd config default | sed "s/SystemdCgroup = false/SystemdCgroup = true/" | sudo tee /etc/containerd/config.toml >/dev/null' \
     'sudo systemctl daemon-reload' \
     'sudo systemctl enable --now containerd' \
     'sudo systemctl restart containerd' \
