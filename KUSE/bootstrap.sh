@@ -12,21 +12,15 @@ set -Eeuo pipefail
 # Highlights:
 # - Fester Versionsschalter für reproduzierbare Labs
 # - Optionaler Stable-Modus
-# - pkgs.k8s.io Minor-Repo wird aus der K8s-Version abgeleitet
 # - Alte Kubernetes-APT-Quellen werden VOR dem ersten apt-get update entfernt
-# - Repo-Keyring wird frisch aufgebaut
-# - APT/DPKG-Lock-Handling für unattended-upgrades
-# - Installiert/konfiguriert containerd (SystemdCgroup=true)
+# - Kubernetes-Repo-Keyring wird frisch aufgebaut
+# - unattended-upgrades / apt-daily werden im Lab deaktiviert
+# - APT/DPKG-Lock-Handling
+# - containerd mit SystemdCgroup=true
 # - Idempotenteres /etc/hosts
-# - Optionaler RESET-Modus für bestehende Cluster
+# - Optionaler RESET-Modus
 # - kubeadm init mit expliziter --kubernetes-version
 # - Calico via Tigera Operator
-#
-# Beispiele:
-#   PASS='secret' bash ./bootstrap.sh
-#   PASS='secret' RESET_CLUSTER=yes bash ./bootstrap.sh
-#   PASS='secret' VERSION_MODE=fixed K8S_FIXED_VERSION=v1.35.2 CALICO_FIXED_VERSION=v3.31.4 bash ./bootstrap.sh
-#   PASS='secret' VERSION_MODE=stable bash ./bootstrap.sh
 ###############################################################################
 
 # ----------------------------- User input -----------------------------
@@ -225,29 +219,50 @@ for n in "${NODES[@]}"; do
     '' \
     'wait_for_apt() {' \
     '  echo "Waiting for APT/DPKG locks to be released..."' \
-    '  for i in {1..120}; do' \
-    '    if sudo fuser /var/lib/dpkg/lock-frontend >/dev/null 2>&1; then' \
-    '      echo "  dpkg lock-frontend busy..."' \
-    '    elif sudo fuser /var/lib/dpkg/lock >/dev/null 2>&1; then' \
-    '      echo "  dpkg lock busy..."' \
-    '    elif sudo fuser /var/lib/apt/lists/lock >/dev/null 2>&1; then' \
-    '      echo "  apt lists lock busy..."' \
-    '    elif sudo fuser /var/cache/apt/archives/lock >/dev/null 2>&1; then' \
-    '      echo "  apt archives lock busy..."' \
-    '    else' \
+    '  for i in {1..60}; do' \
+    '    LOCKPID=""' \
+    '    LOCKFILE=""' \
+    '    for f in /var/lib/dpkg/lock-frontend /var/lib/dpkg/lock /var/lib/apt/lists/lock /var/cache/apt/archives/lock; do' \
+    '      if sudo fuser "$f" >/dev/null 2>&1; then' \
+    '        LOCKPID="$(sudo fuser "$f" 2>/dev/null | awk "{print \$1}")"' \
+    '        LOCKFILE="$f"' \
+    '        break' \
+    '      fi' \
+    '    done' \
+    '    if [ -z "$LOCKPID" ]; then' \
     '      echo "APT/DPKG locks are free."' \
     '      return 0' \
     '    fi' \
+    '    echo "  lock busy: $LOCKFILE (pid: $LOCKPID)"' \
+    '    ps -p "$LOCKPID" -o pid=,ppid=,cmd= 2>/dev/null || true' \
     '    sleep 5' \
     '  done' \
     '  echo "ERROR: Timed out waiting for APT/DPKG locks."' \
     '  return 1' \
     '}' \
     '' \
-    'echo "== [PRE] Stop unattended apt jobs if active =="' \
-    'sudo systemctl stop apt-daily.service apt-daily-upgrade.service unattended-upgrades 2>/dev/null || true' \
-    'sudo systemctl kill --kill-who=all unattended-upgrades 2>/dev/null || true' \
+    'force_clear_apt() {' \
+    '  echo "Force-clearing unattended apt jobs for lab..."' \
+    '  sudo systemctl stop unattended-upgrades apt-daily.service apt-daily-upgrade.service 2>/dev/null || true' \
+    '  sudo systemctl disable unattended-upgrades apt-daily.service apt-daily-upgrade.service 2>/dev/null || true' \
+    '  sudo systemctl disable apt-daily.timer apt-daily-upgrade.timer 2>/dev/null || true' \
+    '  echo '\''APT::Periodic::Enable "0";'\'' | sudo tee /etc/apt/apt.conf.d/10disable-periodic >/dev/null' \
+    '  sudo pkill -f unattended-upgrade 2>/dev/null || true' \
+    '  sudo pkill -f apt.systemd.daily 2>/dev/null || true' \
+    '  sleep 2' \
+    '  sudo dpkg --configure -a || true' \
+    '  sudo apt-get -f install -y || true' \
+    '}' \
+    '' \
+    'echo "== [PRE] Disable unattended upgrades for lab environment =="' \
+    'sudo systemctl stop unattended-upgrades apt-daily.service apt-daily-upgrade.service 2>/dev/null || true' \
+    'sudo systemctl disable unattended-upgrades apt-daily.service apt-daily-upgrade.service 2>/dev/null || true' \
+    'sudo systemctl disable apt-daily.timer apt-daily-upgrade.timer 2>/dev/null || true' \
+    'echo '\''APT::Periodic::Enable "0";'\'' | sudo tee /etc/apt/apt.conf.d/10disable-periodic >/dev/null' \
+    'sudo pkill -f unattended-upgrade 2>/dev/null || true' \
+    'sudo pkill -f apt.systemd.daily 2>/dev/null || true' \
     'sleep 2' \
+    'wait_for_apt || force_clear_apt' \
     'wait_for_apt' \
     '' \
     'echo "== [PRE] Clean old Kubernetes APT sources before first apt run =="' \
@@ -269,8 +284,10 @@ for n in "${NODES[@]}"; do
     'sudo grep -R "pkgs.k8s.io\|prod-cdn.packages.k8s.io\|isv:/kubernetes" /etc/apt/sources.list /etc/apt/sources.list.d/* 2>/dev/null || true' \
     '' \
     'echo "== [B] dpkg recovery =="' \
+    'wait_for_apt || force_clear_apt' \
     'wait_for_apt' \
     'sudo dpkg --configure -a || true' \
+    'wait_for_apt || force_clear_apt' \
     'wait_for_apt' \
     'sudo apt-get -f install -y || true' \
     '' \
@@ -307,8 +324,10 @@ for n in "${NODES[@]}"; do
     'fi' \
     '' \
     'echo "== [C] Base packages =="' \
+    'wait_for_apt || force_clear_apt' \
     'wait_for_apt' \
     'sudo apt-get update' \
+    'wait_for_apt || force_clear_apt' \
     'wait_for_apt' \
     'sudo apt-get install -y ca-certificates curl gpg apt-transport-https software-properties-common psmisc' \
     '' \
@@ -326,8 +345,10 @@ for n in "${NODES[@]}"; do
     'sudo sysctl --system >/dev/null || true' \
     '' \
     'echo "== [I] Install containerd =="' \
+    'wait_for_apt || force_clear_apt' \
     'wait_for_apt' \
     'sudo apt-get update' \
+    'wait_for_apt || force_clear_apt' \
     'wait_for_apt' \
     'sudo apt-get install -y containerd' \
     'sudo mkdir -p /etc/containerd' \
@@ -337,8 +358,10 @@ for n in "${NODES[@]}"; do
     'sudo systemctl restart containerd' \
     '' \
     'echo "== [J] Install Kubernetes packages =="' \
+    'wait_for_apt || force_clear_apt' \
     'wait_for_apt' \
     'sudo apt-get update' \
+    'wait_for_apt || force_clear_apt' \
     'wait_for_apt' \
     'sudo apt-get install -y kubeadm kubelet kubectl cri-tools' \
     'sudo apt-mark hold kubeadm kubelet kubectl || true' \
