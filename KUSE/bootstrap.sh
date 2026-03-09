@@ -13,6 +13,8 @@ set -Eeuo pipefail
 # - Fester Versionsschalter für reproduzierbare Labs
 # - Optionaler Stable-Modus
 # - pkgs.k8s.io Minor-Repo wird aus der K8s-Version abgeleitet
+# - Repo-Keyring wird bei jedem Lauf frisch aufgebaut
+# - APT/DPKG-Lock-Handling für unattended-upgrades
 # - Installiert/konfiguriert containerd (SystemdCgroup=true)
 # - Idempotenteres /etc/hosts
 # - Optionaler RESET-Modus für bestehende Cluster
@@ -225,6 +227,35 @@ for n in "${NODES[@]}"; do
     'set -Eeuo pipefail' \
     'export DEBIAN_FRONTEND=noninteractive' \
     '' \
+    'wait_for_apt() {' \
+    '  echo "Waiting for APT/DPKG locks to be released..."' \
+    '  for i in {1..120}; do' \
+    '    if sudo fuser /var/lib/dpkg/lock-frontend >/dev/null 2>&1; then' \
+    '      echo "  dpkg lock-frontend busy..."' \
+    '    elif sudo fuser /var/lib/dpkg/lock >/dev/null 2>&1; then' \
+    '      echo "  dpkg lock busy..."' \
+    '    elif sudo fuser /var/lib/apt/lists/lock >/dev/null 2>&1; then' \
+    '      echo "  apt lists lock busy..."' \
+    '    elif sudo fuser /var/cache/apt/archives/lock >/dev/null 2>&1; then' \
+    '      echo "  apt archives lock busy..."' \
+    '    else' \
+    '      echo "APT/DPKG locks are free."' \
+    '      return 0' \
+    '    fi' \
+    '    sleep 5' \
+    '  done' \
+    '  echo "ERROR: Timed out waiting for APT/DPKG locks."' \
+    '  return 1' \
+    '}' \
+    '' \
+    'echo "== [PRE] Stop unattended apt jobs if active =="' \
+    'sudo systemctl stop apt-daily.service apt-daily-upgrade.service unattended-upgrades 2>/dev/null || true' \
+    'sudo systemctl kill --kill-who=all unattended-upgrades 2>/dev/null || true' \
+    'sleep 2' \
+    'wait_for_apt' \
+    'sudo dpkg --configure -a || true' \
+    'sudo apt-get -f install -y || true' \
+    '' \
     'echo "== [LAB FIX] /dev/disk/by-id =="' \
     'sudo mkdir -p /dev/disk/by-id' \
     'ROOTDEV="$(findmnt -n -o SOURCE / || true)"' \
@@ -258,12 +289,16 @@ for n in "${NODES[@]}"; do
     'fi' \
     '' \
     'echo "== [B] dpkg recovery =="' \
+    'wait_for_apt' \
     'sudo dpkg --configure -a || true' \
+    'wait_for_apt' \
     'sudo apt-get -f install -y || true' \
     '' \
     'echo "== [C] Base packages =="' \
+    'wait_for_apt' \
     'sudo apt-get update' \
-    'sudo apt-get install -y ca-certificates curl gpg apt-transport-https software-properties-common' \
+    'wait_for_apt' \
+    'sudo apt-get install -y ca-certificates curl gpg apt-transport-https software-properties-common psmisc' \
     '' \
     'echo "== [D] Disable APT proxy for Kubernetes repos (DIRECT) =="' \
     'sudo tee /etc/apt/apt.conf.d/99-k8s-direct >/dev/null <<EOF' \
@@ -275,16 +310,19 @@ for n in "${NODES[@]}"; do
     'Acquire::https::Proxy::dl.k8s.io "DIRECT";' \
     'EOF' \
     '' \
-    "echo \"== [E] Kubernetes repo (${K8S_REPO_MINOR}) ==\"" \
+    'echo "== [E] Kubernetes repo ('"${K8S_REPO_MINOR}"') =="' \
     'sudo rm -f /etc/apt/sources.list.d/kubernetes.list /etc/apt/sources.list.d/*kubernetes*.list || true' \
+    'sudo rm -f /etc/apt/keyrings/kubernetes-apt-keyring.gpg || true' \
     'sudo rm -f /etc/apt/trusted.gpg.d/*kubernetes* || true' \
     'sudo mkdir -p /etc/apt/keyrings' \
-    "curl -fsSL --retry 3 --retry-delay 1 https://pkgs.k8s.io/core:/stable:/${K8S_REPO_MINOR}/deb/Release.key -o /tmp/k8s-release.key || true" \
-    'test -s /tmp/k8s-release.key ||' \
-    "curl -fsSL --retry 3 --retry-delay 1 https://prod-cdn.packages.k8s.io/repositories/isv:/kubernetes:/core:/stable:/${K8S_REPO_MINOR}/deb/Release.key -o /tmp/k8s-release.key" \
-    'sudo gpg --dearmor --batch --yes --no-tty -o /etc/apt/keyrings/kubernetes-apt-keyring.gpg /tmp/k8s-release.key' \
+    "curl -fsSL --retry 3 --retry-delay 1 https://pkgs.k8s.io/core:/stable:/${K8S_REPO_MINOR}/deb/Release.key | sudo gpg --dearmor --batch --yes --no-tty -o /etc/apt/keyrings/kubernetes-apt-keyring.gpg" \
+    'test -s /etc/apt/keyrings/kubernetes-apt-keyring.gpg' \
     'sudo chmod 0644 /etc/apt/keyrings/kubernetes-apt-keyring.gpg' \
     "echo \"deb [signed-by=/etc/apt/keyrings/kubernetes-apt-keyring.gpg] https://pkgs.k8s.io/core:/stable:/${K8S_REPO_MINOR}/deb/ /\" | sudo tee /etc/apt/sources.list.d/kubernetes.list >/dev/null" \
+    'sudo apt-get clean' \
+    'sudo rm -rf /var/lib/apt/lists/*' \
+    'wait_for_apt' \
+    'sudo apt-get update' \
     '' \
     'echo "== [F] Disable swap =="' \
     'sudo swapoff -a || true' \
@@ -300,7 +338,9 @@ for n in "${NODES[@]}"; do
     'sudo sysctl --system >/dev/null || true' \
     '' \
     'echo "== [I] Install containerd =="' \
+    'wait_for_apt' \
     'sudo apt-get update' \
+    'wait_for_apt' \
     'sudo apt-get install -y containerd' \
     'sudo mkdir -p /etc/containerd' \
     'containerd config default | sed "s/SystemdCgroup = false/SystemdCgroup = true/" | sudo tee /etc/containerd/config.toml >/dev/null' \
@@ -309,7 +349,9 @@ for n in "${NODES[@]}"; do
     'sudo systemctl restart containerd' \
     '' \
     'echo "== [J] Install Kubernetes packages =="' \
+    'wait_for_apt' \
     'sudo apt-get update' \
+    'wait_for_apt' \
     'sudo apt-get install -y kubeadm kubelet kubectl cri-tools' \
     'sudo apt-mark hold kubeadm kubelet kubectl || true' \
     '' \
