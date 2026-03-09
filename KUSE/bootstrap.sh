@@ -13,8 +13,8 @@ set -Eeuo pipefail
 # - Fester Versionsschalter für reproduzierbare Labs
 # - Optionaler Stable-Modus
 # - pkgs.k8s.io Minor-Repo wird aus der K8s-Version abgeleitet
-# - Repo-Keyring wird bei jedem Lauf frisch aufgebaut
-# - Alte Kubernetes-APT-Quellen werden hart entfernt (inkl. v1.28-Altlasten)
+# - Alte Kubernetes-APT-Quellen werden VOR dem ersten apt-get update entfernt
+# - Repo-Keyring wird frisch aufgebaut
 # - APT/DPKG-Lock-Handling für unattended-upgrades
 # - Installiert/konfiguriert containerd (SystemdCgroup=true)
 # - Idempotenteres /etc/hosts
@@ -74,12 +74,7 @@ for cmd in ssh sshpass base64 curl sed awk grep; do
 done
 
 # ---------------------- Version policy ----------------------
-# Modi:
-#   VERSION_MODE=fixed   -> reproduzierbares Lab mit festem Release
-#   VERSION_MODE=stable  -> zieht aktuelle stable.txt
 VERSION_MODE="${VERSION_MODE:-fixed}"
-
-# Feste, reproduzierbare Lab-Versionen
 K8S_FIXED_VERSION="${K8S_FIXED_VERSION:-v1.35.2}"
 CALICO_FIXED_VERSION="${CALICO_FIXED_VERSION:-v3.31.4}"
 
@@ -99,15 +94,15 @@ resolve_versions() {
       ;;
   esac
 
-  if [[ ! "${K8S_VERSION}" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+  [[ "${K8S_VERSION}" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]] || {
     echo "ERROR: Invalid Kubernetes version '${K8S_VERSION}'" >&2
     exit 1
-  fi
+  }
 
-  if [[ ! "${CALICO_VERSION}" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+  [[ "${CALICO_VERSION}" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]] || {
     echo "ERROR: Invalid Calico version '${CALICO_VERSION}'" >&2
     exit 1
-  fi
+  }
 
   K8S_REPO_MINOR="$(sed -E 's/^(v[0-9]+\.[0-9]+)\..*/\1/' <<< "${K8S_VERSION}")"
 }
@@ -254,7 +249,29 @@ for n in "${NODES[@]}"; do
     'sudo systemctl kill --kill-who=all unattended-upgrades 2>/dev/null || true' \
     'sleep 2' \
     'wait_for_apt' \
+    '' \
+    'echo "== [PRE] Clean old Kubernetes APT sources before first apt run =="' \
+    'sudo rm -f /etc/apt/sources.list.d/kubernetes.list /etc/apt/sources.list.d/*kubernetes*.list || true' \
+    'sudo find /etc/apt/sources.list.d -maxdepth 1 -type f -name "*kubernetes*" -delete 2>/dev/null || true' \
+    'sudo sed -i "/pkgs.k8s.io/d;/prod-cdn.packages.k8s.io/d;/isv:\/kubernetes/d" /etc/apt/sources.list 2>/dev/null || true' \
+    'sudo rm -f /etc/apt/keyrings/kubernetes-apt-keyring.gpg || true' \
+    'sudo rm -f /etc/apt/trusted.gpg.d/*kubernetes* || true' \
+    'sudo apt-get clean' \
+    'sudo rm -rf /var/lib/apt/lists/*' \
+    '' \
+    'echo "== [PRE] Configure Kubernetes repo ('"${K8S_REPO_MINOR}"') before first apt run =="' \
+    'sudo mkdir -p /etc/apt/keyrings' \
+    "curl -fsSL --retry 3 --retry-delay 1 https://pkgs.k8s.io/core:/stable:/${K8S_REPO_MINOR}/deb/Release.key | sudo gpg --dearmor --batch --yes --no-tty -o /etc/apt/keyrings/kubernetes-apt-keyring.gpg" \
+    'test -s /etc/apt/keyrings/kubernetes-apt-keyring.gpg' \
+    'sudo chmod 0644 /etc/apt/keyrings/kubernetes-apt-keyring.gpg' \
+    "echo \"deb [signed-by=/etc/apt/keyrings/kubernetes-apt-keyring.gpg] https://pkgs.k8s.io/core:/stable:/${K8S_REPO_MINOR}/deb/ /\" | sudo tee /etc/apt/sources.list.d/kubernetes.list >/dev/null" \
+    'echo "--- Kubernetes repo before first apt update ---"' \
+    'sudo grep -R "pkgs.k8s.io\|prod-cdn.packages.k8s.io\|isv:/kubernetes" /etc/apt/sources.list /etc/apt/sources.list.d/* 2>/dev/null || true' \
+    '' \
+    'echo "== [B] dpkg recovery =="' \
+    'wait_for_apt' \
     'sudo dpkg --configure -a || true' \
+    'wait_for_apt' \
     'sudo apt-get -f install -y || true' \
     '' \
     'echo "== [LAB FIX] /dev/disk/by-id =="' \
@@ -289,45 +306,11 @@ for n in "${NODES[@]}"; do
     '  sudo iptables -X || true' \
     'fi' \
     '' \
-    'echo "== [B] dpkg recovery =="' \
-    'wait_for_apt' \
-    'sudo dpkg --configure -a || true' \
-    'wait_for_apt' \
-    'sudo apt-get -f install -y || true' \
-    '' \
     'echo "== [C] Base packages =="' \
     'wait_for_apt' \
     'sudo apt-get update' \
     'wait_for_apt' \
     'sudo apt-get install -y ca-certificates curl gpg apt-transport-https software-properties-common psmisc' \
-    '' \
-    'echo "== [D] Disable APT proxy for Kubernetes repos (DIRECT) =="' \
-    'sudo tee /etc/apt/apt.conf.d/99-k8s-direct >/dev/null <<EOF' \
-    'Acquire::http::Proxy::pkgs.k8s.io "DIRECT";' \
-    'Acquire::https::Proxy::pkgs.k8s.io "DIRECT";' \
-    'Acquire::http::Proxy::prod-cdn.packages.k8s.io "DIRECT";' \
-    'Acquire::https::Proxy::prod-cdn.packages.k8s.io "DIRECT";' \
-    'Acquire::http::Proxy::dl.k8s.io "DIRECT";' \
-    'Acquire::https::Proxy::dl.k8s.io "DIRECT";' \
-    'EOF' \
-    '' \
-    'echo "== [E] Kubernetes repo ('"${K8S_REPO_MINOR}"') =="' \
-    'sudo rm -f /etc/apt/sources.list.d/kubernetes.list /etc/apt/sources.list.d/*kubernetes*.list || true' \
-    'sudo find /etc/apt/sources.list.d -maxdepth 1 -type f -name "*kubernetes*" -delete 2>/dev/null || true' \
-    'sudo sed -i "/pkgs.k8s.io/d;/prod-cdn.packages.k8s.io/d;/isv:\/kubernetes/d" /etc/apt/sources.list 2>/dev/null || true' \
-    'sudo rm -f /etc/apt/keyrings/kubernetes-apt-keyring.gpg || true' \
-    'sudo rm -f /etc/apt/trusted.gpg.d/*kubernetes* || true' \
-    'sudo mkdir -p /etc/apt/keyrings' \
-    "curl -fsSL --retry 3 --retry-delay 1 https://pkgs.k8s.io/core:/stable:/${K8S_REPO_MINOR}/deb/Release.key | sudo gpg --dearmor --batch --yes --no-tty -o /etc/apt/keyrings/kubernetes-apt-keyring.gpg" \
-    'test -s /etc/apt/keyrings/kubernetes-apt-keyring.gpg' \
-    'sudo chmod 0644 /etc/apt/keyrings/kubernetes-apt-keyring.gpg' \
-    "echo \"deb [signed-by=/etc/apt/keyrings/kubernetes-apt-keyring.gpg] https://pkgs.k8s.io/core:/stable:/${K8S_REPO_MINOR}/deb/ /\" | sudo tee /etc/apt/sources.list.d/kubernetes.list >/dev/null" \
-    'echo "--- Kubernetes repo after cleanup ---"' \
-    'sudo grep -R "pkgs.k8s.io\|prod-cdn.packages.k8s.io\|isv:/kubernetes" /etc/apt/sources.list /etc/apt/sources.list.d/* 2>/dev/null || true' \
-    'sudo apt-get clean' \
-    'sudo rm -rf /var/lib/apt/lists/*' \
-    'wait_for_apt' \
-    'sudo apt-get update' \
     '' \
     'echo "== [F] Disable swap =="' \
     'sudo swapoff -a || true' \
