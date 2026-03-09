@@ -21,6 +21,7 @@ set -Eeuo pipefail
 # - Optionaler RESET-Modus
 # - kubeadm init mit expliziter --kubernetes-version
 # - Calico via Tigera Operator
+# - PHASE 7: lokales kubectl passend zur Cluster-Version + kubeconfig
 ###############################################################################
 
 # ----------------------------- User input -----------------------------
@@ -60,7 +61,7 @@ NODES=(
 POD_CIDR="192.168.0.0/16"
 
 # ---------------------------- Local deps -----------------------------
-for cmd in ssh sshpass base64 curl sed awk grep; do
+for cmd in ssh scp sshpass base64 curl sed awk grep sha256sum; do
   command -v "$cmd" >/dev/null 2>&1 || {
     echo "ERROR: missing local command: $cmd" >&2
     exit 1
@@ -125,6 +126,7 @@ SSH_AUTH_OPTS=(
 
 SSH_NO_TTY=( "${SSH_AUTH_OPTS[@]}" )
 SSH_TTY=( "${SSH_AUTH_OPTS[@]}" -t )
+SCP_OPTS=( "${SSH_AUTH_OPTS[@]}" )
 
 b64() {
   printf "%s" "$1" | base64 -w 0 2>/dev/null || printf "%s" "$1" | base64 | tr -d '\n'
@@ -519,6 +521,58 @@ REMOTE_VERIFY_SCRIPT="$(printf '%s\n' \
 )"
 ssh_bash_tty "$KUBE1_IP" "$REMOTE_VERIFY_SCRIPT"
 
+# ----------------------------- PHASE 7 -------------------------------
+echo
+echo "================================================="
+echo "💻 PHASE 7 – Local kubectl install + kubeconfig"
+echo "================================================="
+
+echo "== [7A] Current local kubectl =="
+if command -v kubectl >/dev/null 2>&1; then
+  which kubectl || true
+  kubectl version --client=true || true
+else
+  echo "No local kubectl currently found"
+fi
+
+echo
+echo "== [7B] Remove old local kubectl =="
+if [ -x /usr/local/bin/kubectl ]; then
+  echo "Removing old kubectl from /usr/local/bin/kubectl"
+  sudo rm -f /usr/local/bin/kubectl
+fi
+
+hash -r || true
+
+echo
+echo "== [7C] Install matching local kubectl ${K8S_VERSION} =="
+curl -fsSL --retry 3 --retry-delay 1 -o /tmp/kubectl "https://dl.k8s.io/release/${K8S_VERSION}/bin/linux/amd64/kubectl"
+curl -fsSL --retry 3 --retry-delay 1 -o /tmp/kubectl.sha256 "https://dl.k8s.io/release/${K8S_VERSION}/bin/linux/amd64/kubectl.sha256"
+echo "$(cat /tmp/kubectl.sha256)  /tmp/kubectl" | sha256sum -c -
+sudo install -o root -g root -m 0755 /tmp/kubectl /usr/local/bin/kubectl
+rm -f /tmp/kubectl /tmp/kubectl.sha256
+hash -r || true
+
+echo
+echo "== [7D] Verify local kubectl =="
+which kubectl
+kubectl version --client=true
+
+echo
+echo "== [7E] Fetch kubeconfig from kube-1 =="
+mkdir -p "$HOME/.kube"
+chmod 700 "$HOME/.kube"
+
+sshpass -p "$PASS" scp "${SCP_OPTS[@]}" \
+  "${USER}@${KUBE1_IP}:.kube/config" "$HOME/.kube/config"
+
+chmod 600 "$HOME/.kube/config"
+
+echo
+echo "== [7F] Local cluster access test =="
+kubectl get nodes -o wide || true
+kubectl get pods -A -o wide || true
+
 echo
 echo "🎉 BOOTSTRAP COMPLETE"
-echo "Next: ssh ${USER}@${KUBE1_IP} and run: kubectl get pods -A"
+echo "Local kubectl is ready. Test with: kubectl get nodes -o wide"
