@@ -19,3 +19,7 @@ sudo apt install -y docker-ce docker-ce-cli containerd.io docker-buildx-plugin d
 sudo usermod -aG docker $USER
 newgrp docker
 ```
+***Kube-Hunter**
+```sh
+docker run aquasec/kube-hunter --remote 10.0.0.101
+```
