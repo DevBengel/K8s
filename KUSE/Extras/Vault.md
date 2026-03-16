@@ -104,7 +104,7 @@ done
 # 5 Vault Zugriff konfigurieren
 
 ``` bash
-export VAULT_ADDR=http://127.0.0.1:8200
+export VAULT_ADDR=http://10.0.0.50:8200
 export VAULT_TOKEN=root
 ```
 
@@ -113,7 +113,7 @@ export VAULT_TOKEN=root
 # 6 Vault CLI Alias erstellen
 
 ``` bash
-alias vcli='docker exec -e VAULT_ADDR=http://127.0.0.1:8200 -e VAULT_TOKEN=root vault-demo vault'
+alias vcli='docker exec -e VAULT_ADDR=http://10.0.0.50:8200 -e VAULT_TOKEN=root vault-demo vault'
 ```
 
 Test:
