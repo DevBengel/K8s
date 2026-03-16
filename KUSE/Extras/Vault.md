@@ -1,35 +1,25 @@
-# Kubernetes + Vault Demo
+# Kubernetes + Vault Lab
 
-## Secret aus Vault statt Kubernetes Secret beziehen
+## Vault läuft auf der Student Workstation
 
-Diese Demo zeigt den Unterschied zwischen:
+Diese Demo zeigt, wie ein Kubernetes Pod **Secrets aus HashiCorp Vault**
+bezieht, anstatt sie als Kubernetes Secret im Cluster zu speichern.
 
--   **klassischen Kubernetes Secrets**
--   **Secrets aus einem externen Key Vault**
-
-Am Ende läuft ein Pod, der **sein Secret nicht aus Kubernetes**, sondern
-**direkt aus Vault** holt.
+Die Vault-Instanz läuft **lokal auf der Student Workstation (Docker)**.
 
 ------------------------------------------------------------------------
 
 # Architektur
 
-    +---------------------------+
-    | Kubernetes Cluster        |
-    |                           |
-    | Pod (demo-client)         |
-    |    │                      |
-    |    │ ServiceAccount JWT   |
-    |    ▼                      |
-    +---------------------------+
+    Student Workstation
+    │
+    ├─ Docker Container: Vault (Port 8200)
+    │
+    └─ Kubernetes Cluster
+         │
+         └─ Pod (demo-client)
                │
-               ▼
-    +---------------------------+
-    | HashiCorp Vault           |
-    | (Docker Dev Mode)         |
-    |                           |
-    | KV Secret Engine          |
-    +---------------------------+
+               └─ Authentifiziert sich mit ServiceAccount Token bei Vault
 
 ------------------------------------------------------------------------
 
@@ -37,16 +27,16 @@ Am Ende läuft ein Pod, der **sein Secret nicht aus Kubernetes**, sondern
 
 Benötigt:
 
--   Kubernetes Cluster
--   kubectl mit Admin-Rechten
--   Docker
+-   Kubernetes Cluster erreichbar via `kubectl`
+-   Docker auf der Student Workstation
 -   Internetzugriff
 
-Alle Befehle werden auf einem Host ausgeführt, der Zugriff hat auf:
+Test:
 
-    Kubernetes API
-    Docker
-    Vault Port 8200
+``` bash
+kubectl get nodes
+docker ps
+```
 
 ------------------------------------------------------------------------
 
@@ -58,7 +48,7 @@ kubectl create namespace vault-demo
 
 ------------------------------------------------------------------------
 
-# 2 Klassisches Kubernetes Secret erstellen
+# 2 Beispiel Kubernetes Secret erstellen (Vergleich)
 
 ``` bash
 kubectl -n vault-demo create secret generic app-secret \
@@ -66,7 +56,7 @@ kubectl -n vault-demo create secret generic app-secret \
   --from-literal=password='SuperSecret123!'
 ```
 
-Secret anzeigen:
+Anzeigen:
 
 ``` bash
 kubectl -n vault-demo get secret app-secret -o yaml
@@ -74,7 +64,7 @@ kubectl -n vault-demo get secret app-secret -o yaml
 
 ------------------------------------------------------------------------
 
-# 3 Vault starten (Dev Mode)
+# 3 Vault lokal starten (Docker Dev Mode)
 
 ``` bash
 docker rm -f vault-demo 2>/dev/null || true
@@ -90,71 +80,55 @@ docker run -d \
 
 ------------------------------------------------------------------------
 
-# 4 Warten bis Vault läuft
+# 4 Prüfen ob Vault läuft
 
 ``` bash
-until curl -s http://127.0.0.1:8200/v1/sys/health >/dev/null; do
-  echo "Waiting for Vault..."
-  sleep 2
-done
+curl http://127.0.0.1:8200/v1/sys/health
 ```
 
 ------------------------------------------------------------------------
 
-# 5 Vault Zugriff konfigurieren
+# 5 Vault CLI Zugriff (Docker exec)
+
+Variable definieren:
 
 ``` bash
-export VAULT_ADDR=http://10.0.0.50:8200
-export VAULT_TOKEN=root
-```
-
-------------------------------------------------------------------------
-
-# 6 Vault CLI Alias erstellen
-
-``` bash
-alias vcli='docker exec -e VAULT_ADDR=http://10.0.0.50:8200 -e VAULT_TOKEN=root vault-demo vault'
+VCLI="docker exec -e VAULT_ADDR=http://127.0.0.1:8200 -e VAULT_TOKEN=root vault-demo vault"
 ```
 
 Test:
 
 ``` bash
-vcli status
+$VCLI status
 ```
 
 ------------------------------------------------------------------------
 
-# 7 KV Secret Engine aktivieren
+# 6 KV Secret Engine aktivieren
 
 ``` bash
-vcli secrets enable -path=kv kv-v2
-```
-
-Überprüfen:
-
-``` bash
-vcli secrets list
+$VCLI secrets enable -path=kv kv-v2
 ```
 
 ------------------------------------------------------------------------
 
-# 8 Secret in Vault speichern
+# 7 Secret in Vault speichern
 
 ``` bash
-vcli kv put kv/app/config \
+$VCLI kv put kv/app/config \
   username=appuser \
   password='SuperSecret123!'
 ```
 
-Secret prüfen:
+Test:
 
 ``` bash
-vcli kv get kv/app/config
+$VCLI kv get kv/app/config
 ```
 
 ------------------------------------------------------------------------
 
-# 9 ServiceAccount für Vault Auth erstellen
+# 8 ServiceAccount für Vault Auth erstellen
 
 ``` bash
 cat <<EOF | kubectl apply -f -
@@ -168,7 +142,7 @@ EOF
 
 ------------------------------------------------------------------------
 
-# 10 RBAC für TokenReview
+# 9 RBAC für TokenReview
 
 ``` bash
 cat <<EOF | kubectl apply -f -
@@ -189,7 +163,7 @@ EOF
 
 ------------------------------------------------------------------------
 
-# 11 Client ServiceAccount erstellen
+# 10 ServiceAccount für Demo Pod
 
 ``` bash
 cat <<EOF | kubectl apply -f -
@@ -203,15 +177,15 @@ EOF
 
 ------------------------------------------------------------------------
 
-# 12 Kubernetes Auth in Vault aktivieren
+# 11 Kubernetes Auth in Vault aktivieren
 
 ``` bash
-vcli auth enable kubernetes
+$VCLI auth enable kubernetes
 ```
 
 ------------------------------------------------------------------------
 
-# 13 Kubernetes API Parameter ermitteln
+# 12 Kubernetes API Parameter ermitteln
 
 ``` bash
 export KUBE_HOST="$(kubectl config view --minify -o jsonpath='{.clusters[0].cluster.server}')"
@@ -225,10 +199,10 @@ export TOKEN_REVIEW_JWT="$(kubectl -n vault-demo create token vault-auth)"
 
 ------------------------------------------------------------------------
 
-# 14 Kubernetes Auth konfigurieren
+# 13 Vault Kubernetes Auth konfigurieren
 
 ``` bash
-vcli write auth/kubernetes/config \
+$VCLI write auth/kubernetes/config \
   token_reviewer_jwt="$TOKEN_REVIEW_JWT" \
   kubernetes_host="$KUBE_HOST" \
   kubernetes_ca_cert="$KUBE_CA_CERT" \
@@ -237,7 +211,7 @@ vcli write auth/kubernetes/config \
 
 ------------------------------------------------------------------------
 
-# 15 Vault Policy erstellen
+# 14 Vault Policy erstellen
 
 ``` bash
 cat <<EOF > demo-policy.hcl
@@ -251,16 +225,15 @@ Policy installieren:
 
 ``` bash
 docker cp demo-policy.hcl vault-demo:/tmp/demo-policy.hcl
-
-vcli policy write demo-policy /tmp/demo-policy.hcl
+$VCLI policy write demo-policy /tmp/demo-policy.hcl
 ```
 
 ------------------------------------------------------------------------
 
-# 16 Vault Role erstellen
+# 15 Vault Role erstellen
 
 ``` bash
-vcli write auth/kubernetes/role/demo-role \
+$VCLI write auth/kubernetes/role/demo-role \
   bound_service_account_names=demo-client \
   bound_service_account_namespaces=vault-demo \
   policies=demo-policy \
@@ -269,15 +242,18 @@ vcli write auth/kubernetes/role/demo-role \
 
 ------------------------------------------------------------------------
 
-# 17 Host IP ermitteln
+# 16 Host IP der Student Workstation ermitteln
+
+Pods müssen Vault erreichen können.
 
 ``` bash
 export VAULT_HOST_IP=$(hostname -I | awk '{print $1}')
+echo $VAULT_HOST_IP
 ```
 
 ------------------------------------------------------------------------
 
-# 18 Demo Pod erstellen
+# 17 Demo Pod starten
 
 ``` bash
 cat <<EOF | kubectl apply -f -
@@ -299,27 +275,27 @@ spec:
 
         VAULT_ADDR="http://${VAULT_HOST_IP}:8200"
 
-        JWT=$(cat /var/run/secrets/kubernetes.io/serviceaccount/token)
+        JWT=\$(cat /var/run/secrets/kubernetes.io/serviceaccount/token)
 
-        LOGIN=$(curl -s --request POST \
+        LOGIN=\$(curl -s --request POST \
           --header "Content-Type: application/json" \
-          --data "{\"jwt\":\"$JWT\",\"role\":\"demo-role\"}" \
-          $VAULT_ADDR/v1/auth/kubernetes/login)
+          --data "{\"jwt\":\"\$JWT\",\"role\":\"demo-role\"}" \
+          \$VAULT_ADDR/v1/auth/kubernetes/login)
 
-        TOKEN=$(echo $LOGIN | jq -r '.auth.client_token')
+        TOKEN=\$(echo \$LOGIN | jq -r '.auth.client_token')
 
-        SECRET=$(curl -s \
-          --header "X-Vault-Token: $TOKEN" \
-          $VAULT_ADDR/v1/kv/data/app/config)
+        SECRET=\$(curl -s \
+          --header "X-Vault-Token: \$TOKEN" \
+          \$VAULT_ADDR/v1/kv/data/app/config)
 
         echo "Secret from Vault:"
-        echo $SECRET | jq .
+        echo \$SECRET | jq .
 
-        USERNAME=$(echo $SECRET | jq -r '.data.data.username')
-        PASSWORD=$(echo $SECRET | jq -r '.data.data.password')
+        USERNAME=\$(echo \$SECRET | jq -r '.data.data.username')
+        PASSWORD=\$(echo \$SECRET | jq -r '.data.data.password')
 
-        echo "username=$USERNAME"
-        echo "password=$PASSWORD"
+        echo "username=\$USERNAME"
+        echo "password=\$PASSWORD"
 
         echo "Demo finished."
 EOF
@@ -327,15 +303,21 @@ EOF
 
 ------------------------------------------------------------------------
 
-# 19 Pod Logs anzeigen
+# 18 Logs anzeigen
 
 ``` bash
 kubectl -n vault-demo logs demo-client -f
 ```
 
+Erwartete Ausgabe:
+
+    username=appuser
+    password=SuperSecret123!
+    Demo finished.
+
 ------------------------------------------------------------------------
 
-# 20 Aufräumen
+# 19 Aufräumen
 
 ``` bash
 kubectl delete namespace vault-demo
@@ -346,7 +328,7 @@ rm demo-policy.hcl
 
 ------------------------------------------------------------------------
 
-# Ergebnis
+# Fazit
 
 Der Pod hat:
 
@@ -355,11 +337,5 @@ Der Pod hat:
 3.  ein Vault Token erhalten\
 4.  das Secret aus Vault gelesen
 
-Damit liegt das Secret **nicht mehr als Kubernetes Secret im Cluster**.
-
-------------------------------------------------------------------------
-
-# Merksatz
-
-    Kubernetes Secret = Secret im Cluster
-    Vault Secret = Secret außerhalb des Clusters
+Damit liegt das Secret **nicht als Kubernetes Secret im Cluster**,
+sondern **im externen Vault**.
