@@ -1,4 +1,5 @@
-Um das Cluster vorzubereiten einfach die unten stehende Befehle per Copy & Paste auf die Student Workstation kopieren.
+Um das Cluster vorzubereiten einfach die unten stehende Befehle per Copy & Paste 
+in den Terminal Student Workstation kopieren.
 
 ```sh
 git clone https://github.com/DevBengel/K8s.git
