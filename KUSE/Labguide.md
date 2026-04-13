@@ -19,7 +19,7 @@ Nach wenigen Minuten ist das Labor vorbereitet und das K8s Cluster steht.
 Alle weiteren Befehle führen wir auf dem System "kube-1" aus.
 Verbinden Sie sich mit dem System via ssh.
 
-ssh student@kube-1 #Password: L1nux_dc
+ssh student@kube-1 
 
 ---
 
