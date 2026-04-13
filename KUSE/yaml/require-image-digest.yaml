@@ -1,0 +1,20 @@
+apiVersion: kyverno.io/v1
+kind: Policy
+metadata:
+  name: require-image-digest
+  namespace: kyverno-lab
+spec:
+  validationFailureAction: Audit
+  background: true
+  rules:
+  - name: images-must-use-digest
+    match:
+      resources:
+        kinds:
+        - Pod
+    validate:
+      message: "Images müssen per Digest referenziert werden (…@sha256:…)."
+      pattern:
+        spec:
+          containers:
+          - image: "*@sha256:*"

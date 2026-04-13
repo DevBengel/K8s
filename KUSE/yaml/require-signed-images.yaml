@@ -1,0 +1,23 @@
+apiVersion: kyverno.io/v1
+kind: Policy
+metadata:
+  name: require-signed-images
+  namespace: kyverno-lab
+spec:
+  validationFailureAction: Enforce
+  rules:
+  - name: verify-sigstore-image
+    match:
+      resources:
+        kinds:
+        - Pod
+    verifyImages:
+    - imageReferences:
+      - "ghcr.io/sigstore/*"
+      attestors:
+      - entries:
+        - keyless:
+            issuer: "https://accounts.google.com"
+            subject: "keyless@projectsigstore.iam.gserviceaccount.com"
+            rekor:
+              url: "https://rekor.sigstore.dev"

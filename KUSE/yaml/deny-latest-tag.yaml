@@ -1,0 +1,20 @@
+apiVersion: kyverno.io/v1
+kind: Policy
+metadata:
+  name: deny-latest-tag
+  namespace: kyverno-lab
+spec:
+  validationFailureAction: Audit
+  background: true
+  rules:
+  - name: block-latest-tag
+    match:
+      resources:
+        kinds:
+        - Pod
+    validate:
+      message: "Images mit dem Tag ':latest' sind im Namespace kyverno-lab nicht erlaubt."
+      pattern:
+        spec:
+          containers:
+          - image: "!*:latest"

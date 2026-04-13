@@ -1,0 +1,18 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: lab6-digest
+  namespace: kyverno-lab
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: lab6-digest
+  template:
+    metadata:
+      labels:
+        app: lab6-digest
+    spec:
+      containers:
+      - name: app
+        image: docker.io/library/nginx@sha256:d0ef59cae4570338REPLACE_ME

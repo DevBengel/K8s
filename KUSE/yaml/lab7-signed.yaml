@@ -1,0 +1,18 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: lab7-signed
+  namespace: kyverno-lab
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: lab7-signed
+  template:
+    metadata:
+      labels:
+        app: lab7-signed
+    spec:
+      containers:
+      - name: app
+        image: ghcr.io/sigstore/cosign/cosign:v2.5.0

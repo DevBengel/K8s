@@ -1,0 +1,18 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: lab7-unsigned
+  namespace: kyverno-lab
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: lab7-unsigned
+  template:
+    metadata:
+      labels:
+        app: lab7-unsigned
+    spec:
+      containers:
+      - name: app
+        image: docker.io/library/nginx:1.28

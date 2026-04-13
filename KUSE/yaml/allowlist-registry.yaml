@@ -1,0 +1,20 @@
+apiVersion: kyverno.io/v1
+kind: Policy
+metadata:
+  name: allowlist-registry
+  namespace: kyverno-lab
+spec:
+  validationFailureAction: Audit
+  background: true
+  rules:
+  - name: only-dockerhub-library
+    match:
+      resources:
+        kinds:
+        - Pod
+    validate:
+      message: "Nur Images aus docker.io/library/* sind im Namespace kyverno-lab erlaubt."
+      pattern:
+        spec:
+          containers:
+          - image: "docker.io/library/*"

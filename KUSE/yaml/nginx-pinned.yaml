@@ -1,0 +1,20 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: nginx-pinned
+  namespace: kyverno-lab
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: nginx-pinned
+  template:
+    metadata:
+      labels:
+        app: nginx-pinned
+    spec:
+      containers:
+      - name: nginx
+        image: nginx:1.29
+        ports:
+        - containerPort: 80

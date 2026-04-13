@@ -1,0 +1,18 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: lab6-tagged
+  namespace: kyverno-lab
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: lab6-tagged
+  template:
+    metadata:
+      labels:
+        app: lab6-tagged
+    spec:
+      containers:
+      - name: app
+        image: docker.io/library/nginx:1.29

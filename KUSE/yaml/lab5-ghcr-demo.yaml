@@ -1,0 +1,18 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: lab5-ghcr-demo
+  namespace: kyverno-lab
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: lab5-ghcr-demo
+  template:
+    metadata:
+      labels:
+        app: lab5-ghcr-demo
+    spec:
+      containers:
+      - name: app
+        image: ghcr.io/nginx/nginx:1.29
