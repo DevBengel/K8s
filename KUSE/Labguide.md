@@ -1090,7 +1090,8 @@ Oder gezielt:
 kubectl get policy deny-latest-tag -n kyverno-lab -o yaml | grep validationFailureAction
 ```
 
-Erwartung: ```text
+Erwartung: 
+```bash
 validationFailureAction: Enforce
 ```
 
