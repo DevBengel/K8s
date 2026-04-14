@@ -1888,7 +1888,7 @@ Alle Pods befinden sich im Status `Running`.
 
 ## 8.2 Falco-Logs beobachten
 
-Öffnen Sie ein **zweites Terminal** und beobachte die Falco-Logs kontinuierlich:
+Öffnen Sie ein **zweites Terminal** und beobachten Sie die Falco-Logs kontinuierlich:
 
 ```bash
 kubectl -n falco logs -l app.kubernetes.io/name=falco -f
