@@ -2,34 +2,39 @@
 set -Eeuo pipefail
 
 ###############################################################################
-# install-gitlab-demo.sh
+# install-gitlab-demo-nodeport.sh
 #
-# Demo-Installation für ein KUSE-Lab:
-# - ingress-nginx
+# Demo-Installation für ein KUSE-Lab auf Bare Metal OHNE MetalLB:
+# - ingress-nginx via NodePort
 # - optional cert-manager
 # - GitLab
-# - GitLab Runner
+# - optional GitLab Runner
 #
 # Voraussetzungen:
 # - funktionierendes Kubernetes-Cluster
 # - lokales kubectl + helm
-# - Zugriff mit cluster-admin
+# - cluster-admin Rechte
 #
-# Ziel:
-# - einfache, reproduzierbare Lab-Umgebung
-# - didaktisch geeignet für CI/CD, Registry, Runner, später Cosign
+# Idee:
+# - kein LoadBalancer nötig
+# - Zugriff über:
+#     http://gitlab.<domain>:<NODEPORT_HTTP>
+#   oder bei TLS:
+#     https://gitlab.<domain>:<NODEPORT_HTTPS>
 #
 # WICHTIG:
-# - Dies ist absichtlich eine Demo-/Lab-Installation
-# - keine produktionsreife Sizing-/HA-/Backup-/Security-Defaults
+# - Demo-/Lab-Setup
+# - bewusst klein und pragmatisch
+# - für produktive Nutzung nicht ausreichend gehärtet
 ###############################################################################
 
 # ----------------------------- Config ---------------------------------
 
-DEMO_DOMAIN="${DEMO_DOMAIN:-kuse.lab}"
-GITLAB_HOST="${GITLAB_HOST:-gitlab.${DEMO_DOMAIN}}"
+DEMO_DOMAIN="${DEMO_DOMAIN:-k8s.lan}"
+GITLAB_SUBDOMAIN="${GITLAB_SUBDOMAIN:-gitlab}"
+GITLAB_HOST="${GITLAB_SUBDOMAIN}.${DEMO_DOMAIN}"
 
-INSTALL_CERT_MANAGER="${INSTALL_CERT_MANAGER:-yes}"
+INSTALL_CERT_MANAGER="${INSTALL_CERT_MANAGER:-no}"
 INSTALL_RUNNER="${INSTALL_RUNNER:-yes}"
 
 INGRESS_NGINX_VERSION="${INGRESS_NGINX_VERSION:-4.12.1}"
@@ -37,19 +42,36 @@ CERT_MANAGER_VERSION="${CERT_MANAGER_VERSION:-v1.18.2}"
 GITLAB_CHART_VERSION="${GITLAB_CHART_VERSION:-8.11.2}"
 GITLAB_RUNNER_CHART_VERSION="${GITLAB_RUNNER_CHART_VERSION:-0.77.2}"
 
-GITLAB_NAMESPACE="${GITLAB_NAMESPACE:-gitlab}"
-RUNNER_NAMESPACE="${RUNNER_NAMESPACE:-gitlab-runner}"
 INGRESS_NAMESPACE="${INGRESS_NAMESPACE:-ingress-nginx}"
 CERT_MANAGER_NAMESPACE="${CERT_MANAGER_NAMESPACE:-cert-manager}"
+GITLAB_NAMESPACE="${GITLAB_NAMESPACE:-gitlab}"
+RUNNER_NAMESPACE="${RUNNER_NAMESPACE:-gitlab-runner}"
 
-# Demo: selbstsigniert / Lab
+NODEPORT_HTTP="${NODEPORT_HTTP:-30080}"
+NODEPORT_HTTPS="${NODEPORT_HTTPS:-30443}"
+
+# Auf welchen Node zeigt dein Browser / /etc/hosts?
+# Beispiel:
+#   export ACCESS_IP=10.0.0.101
+ACCESS_IP="${ACCESS_IP:-}"
+
+# TLS im Lab:
+# - mit cert-manager + self-signed ClusterIssuer
+# - oder bewusst HTTP-only für maximale Einfachheit
+ENABLE_TLS="${ENABLE_TLS:-no}"
 CREATE_SELF_SIGNED_ISSUER="${CREATE_SELF_SIGNED_ISSUER:-yes}"
 SELF_SIGNED_ISSUER_NAME="${SELF_SIGNED_ISSUER_NAME:-kuse-selfsigned}"
 
-# GitLab Passwort:
-# Entweder per ENV setzen:
-#   export GITLAB_ROOT_PASSWORD='SuperSecret123!'
-# oder das Script fragt interaktiv
+# Kleine Demo-Größen
+INSTALL_MONITORING="${INSTALL_MONITORING:-no}"
+GITLAB_STORAGE_CLASS="${GITLAB_STORAGE_CLASS:-}"
+
+POSTGRES_SIZE="${POSTGRES_SIZE:-8Gi}"
+REDIS_SIZE="${REDIS_SIZE:-2Gi}"
+MINIO_SIZE="${MINIO_SIZE:-10Gi}"
+GITALY_SIZE="${GITALY_SIZE:-20Gi}"
+
+# GitLab root password
 if [[ -z "${GITLAB_ROOT_PASSWORD:-}" ]]; then
   read -rsp "GitLab root password: " GITLAB_ROOT_PASSWORD
   echo
@@ -59,20 +81,8 @@ if [[ -z "${GITLAB_ROOT_PASSWORD:-}" ]]; then
   fi
 fi
 
-# Optional: Runner-Registrierungstoken
-# Kann später auch manuell gesetzt werden, sobald GitLab läuft
+# Runner Registration Token optional
 RUNNER_REGISTRATION_TOKEN="${RUNNER_REGISTRATION_TOKEN:-}"
-
-# Demo-Storagegrößen
-GITLAB_STORAGE_CLASS="${GITLAB_STORAGE_CLASS:-}"
-POSTGRES_SIZE="${POSTGRES_SIZE:-8Gi}"
-REDIS_SIZE="${REDIS_SIZE:-2Gi}"
-MINIO_SIZE="${MINIO_SIZE:-10Gi}"
-GITALY_SIZE="${GITALY_SIZE:-20Gi}"
-PROMETHEUS_SIZE="${PROMETHEUS_SIZE:-8Gi}"
-
-# Ressourcen klein halten
-INSTALL_MONITORING="${INSTALL_MONITORING:-no}"
 
 # ----------------------------- Helpers --------------------------------
 
@@ -112,13 +122,18 @@ kubectl version --client=true
 helm version
 kubectl get nodes -o wide
 
+if [[ "${ENABLE_TLS}" == "yes" && "${INSTALL_CERT_MANAGER}" != "yes" ]]; then
+  echo "ERROR: ENABLE_TLS=yes requires INSTALL_CERT_MANAGER=yes" >&2
+  exit 1
+fi
+
 section "🧱 Ensure namespaces"
 apply_ns "$INGRESS_NAMESPACE"
 apply_ns "$CERT_MANAGER_NAMESPACE"
 apply_ns "$GITLAB_NAMESPACE"
 apply_ns "$RUNNER_NAMESPACE"
 
-# ----------------------------- Repo setup -----------------------------
+# ----------------------------- Repos ----------------------------------
 
 section "📚 Helm repositories"
 helm repo add ingress-nginx https://kubernetes.github.io/ingress-nginx >/dev/null 2>&1 || true
@@ -129,26 +144,29 @@ helm repo update
 
 # ----------------------------- ingress-nginx --------------------------
 
-section "🌐 Install ingress-nginx"
+section "🌐 Install ingress-nginx as NodePort"
 
-cat >/tmp/ingress-nginx-values.yaml <<'EOF'
+cat >/tmp/ingress-nginx-nodeport-values.yaml <<EOF
 controller:
   replicaCount: 1
   admissionWebhooks:
     enabled: true
-  service:
-    type: LoadBalancer
   watchIngressWithoutClass: true
   ingressClassResource:
     name: nginx
     enabled: true
     default: true
+  service:
+    type: NodePort
+    nodePorts:
+      http: ${NODEPORT_HTTP}
+      https: ${NODEPORT_HTTPS}
 EOF
 
 helm upgrade --install ingress-nginx ingress-nginx/ingress-nginx \
   --namespace "$INGRESS_NAMESPACE" \
   --version "$INGRESS_NGINX_VERSION" \
-  -f /tmp/ingress-nginx-values.yaml
+  -f /tmp/ingress-nginx-nodeport-values.yaml
 
 wait_rollout "$INGRESS_NAMESPACE" deployment ingress-nginx-controller
 
@@ -171,7 +189,7 @@ if [[ "$INSTALL_CERT_MANAGER" == "yes" ]]; then
 
   kubectl -n "$CERT_MANAGER_NAMESPACE" get pods -o wide
 
-  if [[ "$CREATE_SELF_SIGNED_ISSUER" == "yes" ]]; then
+  if [[ "$ENABLE_TLS" == "yes" && "$CREATE_SELF_SIGNED_ISSUER" == "yes" ]]; then
     section "🪪 Create self-signed ClusterIssuer"
 
     cat >/tmp/selfsigned-issuer.yaml <<EOF
@@ -192,9 +210,8 @@ fi
 
 section "📝 Build GitLab values"
 
-STORAGE_CLASS_BLOCK=""
 if [[ -n "${GITLAB_STORAGE_CLASS}" ]]; then
-  STORAGE_CLASS_BLOCK=$(cat <<EOF
+  STORAGE_BLOCK=$(cat <<EOF
 global:
   hosts:
     domain: ${DEMO_DOMAIN}
@@ -210,7 +227,7 @@ global:
 EOF
 )
 else
-  STORAGE_CLASS_BLOCK=$(cat <<EOF
+  STORAGE_BLOCK=$(cat <<EOF
 global:
   hosts:
     domain: ${DEMO_DOMAIN}
@@ -225,9 +242,9 @@ EOF
 )
 fi
 
-TLS_BLOCK=""
-if [[ "$INSTALL_CERT_MANAGER" == "yes" && "$CREATE_SELF_SIGNED_ISSUER" == "yes" ]]; then
-  TLS_BLOCK=$(cat <<EOF
+TLS_EXTRA=""
+if [[ "${ENABLE_TLS}" == "yes" ]]; then
+  TLS_EXTRA=$(cat <<EOF
   ingress:
     tls:
       enabled: true
@@ -235,11 +252,18 @@ if [[ "$INSTALL_CERT_MANAGER" == "yes" && "$CREATE_SELF_SIGNED_ISSUER" == "yes" 
       cert-manager.io/cluster-issuer: ${SELF_SIGNED_ISSUER_NAME}
 EOF
 )
+else
+  TLS_EXTRA=$(cat <<EOF
+  ingress:
+    tls:
+      enabled: false
+EOF
+)
 fi
 
-cat >/tmp/gitlab-values.yaml <<EOF
-${STORAGE_CLASS_BLOCK}
-${TLS_BLOCK}
+cat >/tmp/gitlab-nodeport-values.yaml <<EOF
+${STORAGE_BLOCK}
+${TLS_EXTRA}
 
 certmanager:
   install: false
@@ -300,22 +324,16 @@ section "🦊 Install GitLab"
 helm upgrade --install gitlab gitlab/gitlab \
   --namespace "$GITLAB_NAMESPACE" \
   --version "$GITLAB_CHART_VERSION" \
-  -f /tmp/gitlab-values.yaml
+  -f /tmp/gitlab-nodeport-values.yaml
 
-section "⏳ Wait for basic GitLab components"
-kubectl -n "$GITLAB_NAMESPACE" get pods -w &
-WATCH_PID=$!
-
-sleep 10
-
-# Basischecks statt auf alles ewig zu warten
+section "⏳ Wait for GitLab pods"
 for i in {1..90}; do
-  READY_PODS="$(kubectl -n "$GITLAB_NAMESPACE" get pods --no-headers 2>/dev/null | awk '$2 !~ /^([0-9]+)\/\1$/ {bad++} END{print bad+0}')"
   TOTAL_PODS="$(kubectl -n "$GITLAB_NAMESPACE" get pods --no-headers 2>/dev/null | wc -l | awk '{print $1}')"
+  NOT_READY="$(kubectl -n "$GITLAB_NAMESPACE" get pods --no-headers 2>/dev/null | awk '$2 !~ /^([0-9]+)\/\1$/ {bad++} END{print bad+0}')"
 
-  echo "GitLab readiness check: total=${TOTAL_PODS}, not-fully-ready=${READY_PODS}"
+  echo "GitLab readiness check: total=${TOTAL_PODS}, not-fully-ready=${NOT_READY}"
 
-  if [[ "${TOTAL_PODS}" -gt 0 && "${READY_PODS}" -eq 0 ]]; then
+  if [[ "${TOTAL_PODS}" -gt 0 && "${NOT_READY}" -eq 0 ]]; then
     echo "✅ GitLab pods appear ready"
     break
   fi
@@ -323,47 +341,34 @@ for i in {1..90}; do
   sleep 10
 done
 
-kill "${WATCH_PID}" 2>/dev/null || true
-
 section "📋 GitLab status"
 kubectl -n "$GITLAB_NAMESPACE" get pods -o wide
 kubectl -n "$GITLAB_NAMESPACE" get svc
 kubectl -n "$GITLAB_NAMESPACE" get ingress
 
-# ----------------------------- Runner install -------------------------
+# ----------------------------- Runner ---------------------------------
 
 if [[ "$INSTALL_RUNNER" == "yes" ]]; then
   section "🏃 GitLab Runner preparation"
 
   if [[ -z "${RUNNER_REGISTRATION_TOKEN}" ]]; then
-    cat <<EOF
-
-Runner registration token is currently empty.
-
-So gehst du weiter:
-1. Öffne GitLab:
-   https://${GITLAB_HOST}
-   oder bei self-signed ggf. trotzdem mit Browser-Warnung
-
-2. Login:
-   user: root
-   password: (das eben gesetzte Passwort)
-
-3. Hole einen Runner Registration Token
-   - entweder projektbezogen
-   - oder gruppenbezogen
-   - oder instanzweiten Runner anlegen
-
-4. Danach Script erneut starten mit:
-   RUNNER_REGISTRATION_TOKEN='TOKEN' INSTALL_CERT_MANAGER=${INSTALL_CERT_MANAGER} INSTALL_RUNNER=yes ./install-gitlab-demo.sh
-
-GitLab bleibt installiert, nur Runner wird noch nicht eingerichtet.
-EOF
+    echo
+    echo "Runner registration token is empty."
+    echo "Installiere den Runner daher noch nicht."
+    echo
+    echo "Nach GitLab-Login kannst du das Script erneut starten mit:"
+    echo "RUNNER_REGISTRATION_TOKEN='TOKEN' INSTALL_RUNNER=yes ./install-gitlab-demo-nodeport.sh"
   else
+    if [[ "${ENABLE_TLS}" == "yes" ]]; then
+      RUNNER_URL="https://${GITLAB_HOST}/"
+    else
+      RUNNER_URL="http://${GITLAB_HOST}:${NODEPORT_HTTP}/"
+    fi
+
     section "🏃 Install GitLab Runner"
 
     cat >/tmp/gitlab-runner-values.yaml <<EOF
-gitlabUrl: https://${GITLAB_HOST}/
+gitlabUrl: ${RUNNER_URL}
 runnerRegistrationToken: "${RUNNER_REGISTRATION_TOKEN}"
 rbac:
   create: true
@@ -373,7 +378,7 @@ runners:
   config: |
     [[runners]]
       name = "kuse-k8s-runner"
-      url = "https://${GITLAB_HOST}/"
+      url = "${RUNNER_URL}"
       token = "${RUNNER_REGISTRATION_TOKEN}"
       executor = "kubernetes"
       [runners.kubernetes]
@@ -382,8 +387,6 @@ runners:
         privileged = true
         pull_policy = "if-not-present"
         helper_image_flavor = "alpine"
-      [runners.cache]
-        Type = "s3"
 concurrent: 2
 checkInterval: 10
 metrics:
@@ -404,35 +407,52 @@ fi
 
 section "✅ Summary"
 
+if [[ -n "${ACCESS_IP}" ]]; then
+  echo "Add this to your local /etc/hosts:"
+  echo "  ${ACCESS_IP} ${GITLAB_HOST}"
+  echo
+fi
+
+if [[ "${ENABLE_TLS}" == "yes" ]]; then
+  echo "GitLab URL:"
+  echo "  https://${GITLAB_HOST}:${NODEPORT_HTTPS}"
+  echo
+  echo "Note:"
+  echo "  With ingress-nginx NodePort, HTTPS runs on the configured NodePort."
+  echo "  Browser warnings are expected with self-signed certificates."
+else
+  echo "GitLab URL:"
+  echo "  http://${GITLAB_HOST}:${NODEPORT_HTTP}"
+fi
+
 cat <<EOF
-GitLab host:
-  ${GITLAB_HOST}
 
-GitLab namespace:
-  ${GITLAB_NAMESPACE}
-
-Runner namespace:
-  ${RUNNER_NAMESPACE}
-
-Ingress namespace:
-  ${INGRESS_NAMESPACE}
-
-cert-manager installed:
-  ${INSTALL_CERT_MANAGER}
-
-Runner installed:
-  ${INSTALL_RUNNER}
+Namespaces:
+  ingress: ${INGRESS_NAMESPACE}
+  gitlab:  ${GITLAB_NAMESPACE}
+  runner:  ${RUNNER_NAMESPACE}
 
 Quick checks:
+  kubectl -n ${INGRESS_NAMESPACE} get svc
   kubectl -n ${GITLAB_NAMESPACE} get pods
   kubectl -n ${GITLAB_NAMESPACE} get ingress
   kubectl -n ${RUNNER_NAMESPACE} get pods
   helm ls -A
 
-Lab note:
-- Für eine echte Demo mit Cosign folgt als nächstes:
-  1. Testprojekt in GitLab anlegen
-  2. Container Registry nutzen
-  3. Runner-Build aktivieren
-  4. Cosign im CI-Job verwenden
+Example start:
+  export ACCESS_IP=10.0.0.101
+  export DEMO_DOMAIN=k8s.lan
+  export GITLAB_ROOT_PASSWORD='SuperSecret123!'
+  ./install-gitlab-demo-nodeport.sh
+
+Then add locally:
+  10.0.0.101 ${GITLAB_HOST}
+
+And open:
 EOF
+
+if [[ "${ENABLE_TLS}" == "yes" ]]; then
+  echo "  https://${GITLAB_HOST}:${NODEPORT_HTTPS}"
+else
+  echo "  http://${GITLAB_HOST}:${NODEPORT_HTTP}"
+fi
