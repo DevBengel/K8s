@@ -19,6 +19,7 @@ set -Eeuo pipefail
 # - keine registry
 # - kein pages
 # - kein prometheus
+# - MinIO bleibt AN, damit der GitLab-Chart eine gültige Object-Storage-Basis hat
 # - Helm install mit --wait=false
 # - danach gezielte Status- und Fehlerprüfung
 ###############################################################################
@@ -46,6 +47,7 @@ INSTALL_INGRESS_NGINX="${INSTALL_INGRESS_NGINX:-yes}"
 POSTGRES_SIZE="${POSTGRES_SIZE:-8Gi}"
 REDIS_SIZE="${REDIS_SIZE:-2Gi}"
 GITALY_SIZE="${GITALY_SIZE:-20Gi}"
+MINIO_SIZE="${MINIO_SIZE:-10Gi}"
 
 if [[ -z "${GITLAB_ROOT_PASSWORD:-}" ]]; then
   read -rsp "GitLab root password: " GITLAB_ROOT_PASSWORD
@@ -177,8 +179,6 @@ global:
     key: password
   storage:
     class: ${STORAGE_CLASS_NAME}
-  minio:
-    enabled: false
 
 installCertmanager: false
 
@@ -202,6 +202,13 @@ pages:
 
 registry:
   enabled: false
+
+minio:
+  persistence:
+    size: ${MINIO_SIZE}
+  ingress:
+    tls:
+      enabled: false
 
 gitlab:
   gitaly:
@@ -261,4 +268,4 @@ EOF
 
 echo
 echo "🎉 Installation angestoßen."
-echo "Warte jetzt, bis PostgreSQL, Redis und Gitaly gesund sind."
+echo "Warte jetzt, bis PostgreSQL, Redis, MinIO und Gitaly gesund sind."
