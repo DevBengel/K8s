@@ -177,6 +177,8 @@ global:
     key: password
   storage:
     class: ${STORAGE_CLASS_NAME}
+  minio:
+    enabled: false
 
 installCertmanager: false
 
@@ -199,9 +201,6 @@ pages:
   enabled: false
 
 registry:
-  enabled: false
-
-minio:
   enabled: false
 
 gitlab:
