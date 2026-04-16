@@ -2,24 +2,29 @@
 set -Eeuo pipefail
 
 ###############################################################################
-# install-gitlab-runner-autocache-v2.sh
+# install-gitlab-runner-autocache-v3.sh
 #
 # Ziel:
 # - GitLab Runner im Cluster installieren
-# - Registration Token nach Möglichkeit automatisch aus GitLab holen
+# - Runner Registration Token automatisch aus GitLab holen
 # - Kubernetes Executor
 # - privileged Builds
 # - MinIO/S3 Cache verwenden
 #
-# WICHTIG:
-# - Runner nutzt den internen GitLab-Service im Cluster
-# - NICHT den externen NodePort / Workstation-Hostnamen
+# Erkenntnisse:
+# - Runner darf NICHT über gitlab.k8s.lan:30080 registrieren
+# - Runner muss den internen Service nutzen:
+#     http://gitlab-webservice-default.gitlab.svc:8181
+# - Job-Pods brauchen clone_url auf den internen Service
+# - Cache-Secret muss als existing secret via runners.cache.secretName
+#   referenziert werden
+# - metrics.podMonitor.enabled=false verhindert Helm-Nil-Fehler
 ###############################################################################
 
 GITLAB_NAMESPACE="${GITLAB_NAMESPACE:-gitlab}"
 RUNNER_NAMESPACE="${RUNNER_NAMESPACE:-gitlab-runner}"
 
-# Interner Service-Zugriff für Pods im Cluster
+# Interner Service-Zugriff für Runner und Job-Pods
 GITLAB_INTERNAL_HOST="${GITLAB_INTERNAL_HOST:-gitlab-webservice-default.${GITLAB_NAMESPACE}.svc}"
 GITLAB_INTERNAL_PORT="${GITLAB_INTERNAL_PORT:-8181}"
 GITLAB_URL="${GITLAB_URL:-http://${GITLAB_INTERNAL_HOST}:${GITLAB_INTERNAL_PORT}}"
@@ -49,6 +54,18 @@ section() {
   echo "================================================="
 }
 
+wait_for_namespace_deletion() {
+  local ns="$1"
+  for _ in {1..120}; do
+    if ! kubectl get ns "$ns" >/dev/null 2>&1; then
+      return 0
+    fi
+    sleep 2
+  done
+  echo "ERROR: namespace '$ns' still exists after waiting" >&2
+  return 1
+}
+
 get_toolbox_pod() {
   kubectl -n "${GITLAB_NAMESPACE}" get pod \
     -lapp=toolbox \
@@ -65,8 +82,8 @@ discover_runner_token() {
   toolbox_pod="$(get_toolbox_pod || true)"
 
   if [[ -z "${toolbox_pod}" ]]; then
-    echo "⚠️  Konnte keinen toolbox Pod finden – Runner Token nicht automatisch ermittelbar"
-    return
+    echo "ERROR: Konnte keinen toolbox Pod finden – Runner Token nicht automatisch ermittelbar" >&2
+    exit 1
   fi
 
   echo "ℹ️  Versuche Runner Registration Token aus GitLab zu lesen ..."
@@ -80,11 +97,11 @@ discover_runner_token() {
   set -e
 
   if [[ "${rc}" -ne 0 || -z "${RUNNER_TOKEN}" ]]; then
-    echo "⚠️  Runner Token konnte nicht automatisch gelesen werden"
-    RUNNER_TOKEN=""
-  else
-    echo "✔ Runner Registration Token automatisch ermittelt"
+    echo "ERROR: Runner Token konnte nicht automatisch gelesen werden" >&2
+    exit 1
   fi
+
+  echo "✔ Runner Registration Token automatisch ermittelt"
 }
 
 discover_minio_credentials() {
@@ -118,26 +135,11 @@ helm version
 kubectl -n "${GITLAB_NAMESPACE}" get pods >/dev/null
 
 discover_runner_token
-
-if [[ -z "${RUNNER_TOKEN}" ]]; then
-  echo
-  echo "👉 Bitte Runner Registration Token manuell setzen."
-  echo "   Beispiel:"
-  echo "   RUNNER_TOKEN='TOKEN' ./install-gitlab-runner-autocache-v2.sh"
-  echo
-  exit 1
-fi
-
 discover_minio_credentials
 
 section "🧹 Runner Namespace reset"
 kubectl delete ns "${RUNNER_NAMESPACE}" --ignore-not-found=true
-for _ in {1..120}; do
-  if ! kubectl get ns "${RUNNER_NAMESPACE}" >/dev/null 2>&1; then
-    break
-  fi
-  sleep 2
-done
+wait_for_namespace_deletion "${RUNNER_NAMESPACE}" || true
 kubectl create ns "${RUNNER_NAMESPACE}"
 
 section "🔐 Cache Secret anlegen"
@@ -151,7 +153,7 @@ helm repo update
 
 section "📝 Runner Values"
 
-cat >/tmp/gitlab-runner-autocache-values-v2.yaml <<EOF
+cat >/tmp/gitlab-runner-autocache-values-v3.yaml <<EOF
 gitlabUrl: ${GITLAB_URL}
 runnerRegistrationToken: "${RUNNER_TOKEN}"
 
@@ -163,6 +165,8 @@ serviceAccount:
 
 metrics:
   enabled: true
+  podMonitor:
+    enabled: false
 
 runners:
   name: "${RUNNER_NAME}"
@@ -178,6 +182,7 @@ runners:
     [[runners]]
       name = "${RUNNER_NAME}"
       url = "${GITLAB_URL}"
+      clone_url = "${GITLAB_URL}"
       token = "${RUNNER_TOKEN}"
       executor = "kubernetes"
 
@@ -201,13 +206,13 @@ runners:
           AuthenticationType = "access-key"
 EOF
 
-cat /tmp/gitlab-runner-autocache-values-v2.yaml
+cat /tmp/gitlab-runner-autocache-values-v3.yaml
 
 section "🚀 Install GitLab Runner"
 helm upgrade --install "${RUNNER_RELEASE_NAME}" gitlab/gitlab-runner \
   -n "${RUNNER_NAMESPACE}" \
   --version "${RUNNER_CHART_VERSION}" \
-  -f /tmp/gitlab-runner-autocache-values-v2.yaml \
+  -f /tmp/gitlab-runner-autocache-values-v3.yaml \
   --wait
 
 section "📌 Status"
