@@ -2,10 +2,10 @@
 set -Eeuo pipefail
 
 ###############################################################################
-# install-gitlab-demo-nodeport-v4.sh
+# install-gitlab-demo-nodeport.sh
 #
-# Funktionaler GitLab-Demo-Stand für Bare-Metal-Lab:
-# - kein DNS nötig (nur /etc/hosts auf dem Client)
+# Funktionaler GitLab-Demo-Stand für Bare-Metal-Lab / virtuelle Workstation:
+# - kein DNS nötig (/etc/hosts wird lokal auf dieser Workstation gepflegt)
 # - kein MetalLB nötig
 # - ingress-nginx via NodePort
 # - local-path Storage
@@ -92,13 +92,33 @@ wait_for_namespace_deletion() {
   return 1
 }
 
+update_hosts_entry() {
+  if [[ -z "${ACCESS_IP}" ]]; then
+    echo "⚠️  ACCESS_IP nicht gesetzt – überspringe /etc/hosts Anpassung"
+    return
+  fi
+
+  local entry="${ACCESS_IP} ${GITLAB_HOST}"
+
+  echo
+  echo "🔧 Aktualisiere /etc/hosts ..."
+
+  if grep -Eq "[[:space:]]${GITLAB_HOST}([[:space:]]|$)" /etc/hosts; then
+    echo "ℹ️  Eintrag für ${GITLAB_HOST} existiert bereits – bereinige alten Eintrag"
+    sudo sed -i "\|[[:space:]]${GITLAB_HOST}\([[:space:]]\|$\)|d" /etc/hosts
+  fi
+
+  echo "${entry}" | sudo tee -a /etc/hosts >/dev/null
+  echo "✔ /etc/hosts aktualisiert: ${entry}"
+}
+
 print_access_hint() {
   echo
   echo "GitLab URL:"
   echo "  http://${GITLAB_HOST}:${NODEPORT_HTTP}"
   echo
   if [[ -n "${ACCESS_IP}" ]]; then
-    echo "Client /etc/hosts:"
+    echo "Lokaler /etc/hosts Eintrag:"
     echo "  ${ACCESS_IP} ${GITLAB_HOST}"
   else
     echo "Setze ACCESS_IP für den passenden /etc/hosts-Hinweis."
@@ -107,6 +127,9 @@ print_access_hint() {
 
 require_cmd kubectl
 require_cmd helm
+require_cmd sudo
+require_cmd getent
+require_cmd curl
 
 section "🔎 Preflight"
 kubectl version --client=true
@@ -175,7 +198,7 @@ kubectl -n "${GITLAB_NAMESPACE}" create secret generic gitlab-root-password \
 
 section "📝 GitLab values"
 
-cat >/tmp/gitlab-nodeport-values-v4.yaml <<EOF
+cat >/tmp/gitlab-nodeport-values-v5.yaml <<EOF
 global:
   hosts:
     domain: ${DEMO_DOMAIN}
@@ -258,7 +281,7 @@ minio:
     size: ${MINIO_SIZE}
 EOF
 
-cat /tmp/gitlab-nodeport-values-v4.yaml
+cat /tmp/gitlab-nodeport-values-v5.yaml
 
 section "🦊 Install GitLab"
 set +e
@@ -266,7 +289,7 @@ helm upgrade --install gitlab gitlab/gitlab \
   --namespace "${GITLAB_NAMESPACE}" \
   --create-namespace \
   --version "${GITLAB_CHART_VERSION}" \
-  -f /tmp/gitlab-nodeport-values-v4.yaml \
+  -f /tmp/gitlab-nodeport-values-v5.yaml \
   --wait=false \
   --timeout "${HELM_TIMEOUT}"
 HELM_RC=$?
@@ -286,7 +309,16 @@ kubectl -n "${GITLAB_NAMESPACE}" get events --sort-by=.lastTimestamp | tail -n 4
 helm get values gitlab -n "${GITLAB_NAMESPACE}" || true
 helm status gitlab -n "${GITLAB_NAMESPACE}" || true
 
+update_hosts_entry
 print_access_hint
+
+section "🧪 Lokale Zugriffstests"
+echo "Namensauflösung:"
+getent hosts "${GITLAB_HOST}" || true
+
+echo
+echo "HTTP-Test:"
+curl -I "http://${GITLAB_HOST}:${NODEPORT_HTTP}" || true
 
 section "🩺 Nützliche Diagnosebefehle"
 cat <<EOF
