@@ -2,7 +2,7 @@
 set -Eeuo pipefail
 
 ###############################################################################
-# install-gitlab-demo-nodeport-v5.1.sh
+# install-gitlab-demo-nodeport-v5.2.sh
 #
 # Funktionaler GitLab-Demo-Stand für Bare-Metal-Lab / virtuelle Workstation:
 # - kein DNS nötig (/etc/hosts wird lokal auf dieser Workstation gepflegt)
@@ -21,14 +21,18 @@ set -Eeuo pipefail
 # - Legacy-Bitnami-Repositories für PostgreSQL/Redis
 # - Helm-Install darf fehlschlagen, wenn Kernpods danach trotzdem gesund sind
 #
-# Wichtig:
+# WICHTIG:
 # - /etc/hosts muss auf eine K8s-Node-IP zeigen, NICHT auf die Workstation-IP
+# - Standardmäßig wird kube-1 / 10.0.0.101 verwendet
 ###############################################################################
 
 DEMO_DOMAIN="${DEMO_DOMAIN:-k8s.lan}"
 GITLAB_SUBDOMAIN="${GITLAB_SUBDOMAIN:-gitlab}"
 GITLAB_HOST="${GITLAB_SUBDOMAIN}.${DEMO_DOMAIN}"
-ACCESS_IP="${ACCESS_IP:-}"
+
+# Für dieses Lab bewusst fest auf kube-1, kann aber überschrieben werden
+ACCESS_IP="${ACCESS_IP:-10.0.0.101}"
+PREFERRED_NODE_NAME="${PREFERRED_NODE_NAME:-kube-1}"
 
 INGRESS_NAMESPACE="${INGRESS_NAMESPACE:-ingress-nginx}"
 GITLAB_NAMESPACE="${GITLAB_NAMESPACE:-gitlab}"
@@ -96,13 +100,13 @@ wait_for_namespace_deletion() {
 }
 
 detect_node_access_ip() {
-  if [[ -n "${ACCESS_IP}" ]]; then
-    echo "ℹ️  Verwende vorgegebenes ACCESS_IP=${ACCESS_IP}"
+  if [[ -n "${ACCESS_IP:-}" ]]; then
+    echo "ℹ️  Verwende ACCESS_IP=${ACCESS_IP}"
     return
   fi
 
-  if kubectl get node kube-1 >/dev/null 2>&1; then
-    ACCESS_IP="$(kubectl get node kube-1 -o jsonpath='{.status.addresses[?(@.type=="InternalIP")].address}')"
+  if kubectl get node "${PREFERRED_NODE_NAME}" >/dev/null 2>&1; then
+    ACCESS_IP="$(kubectl get node "${PREFERRED_NODE_NAME}" -o jsonpath='{.status.addresses[?(@.type=="InternalIP")].address}')"
   fi
 
   if [[ -z "${ACCESS_IP}" ]]; then
@@ -114,7 +118,7 @@ detect_node_access_ip() {
     exit 1
   fi
 
-  echo "ℹ️  Automatisch erkannte Node-IP für NodePort-Zugriff: ${ACCESS_IP}"
+  echo "ℹ️  Node-IP für NodePort-Zugriff: ${ACCESS_IP}"
 }
 
 update_hosts_entry() {
@@ -142,12 +146,8 @@ print_access_hint() {
   echo "GitLab URL:"
   echo "  http://${GITLAB_HOST}:${NODEPORT_HTTP}"
   echo
-  if [[ -n "${ACCESS_IP}" ]]; then
-    echo "Lokaler /etc/hosts Eintrag:"
-    echo "  ${ACCESS_IP} ${GITLAB_HOST}"
-  else
-    echo "Setze ACCESS_IP für den passenden /etc/hosts-Hinweis."
-  fi
+  echo "Lokaler /etc/hosts Eintrag:"
+  echo "  ${ACCESS_IP} ${GITLAB_HOST}"
 }
 
 require_cmd kubectl
@@ -223,7 +223,7 @@ kubectl -n "${GITLAB_NAMESPACE}" create secret generic gitlab-root-password \
 
 section "📝 GitLab values"
 
-cat >/tmp/gitlab-nodeport-values-v5.1.yaml <<EOF
+cat >/tmp/gitlab-nodeport-values-v5.2.yaml <<EOF
 global:
   hosts:
     domain: ${DEMO_DOMAIN}
@@ -306,7 +306,7 @@ minio:
     size: ${MINIO_SIZE}
 EOF
 
-cat /tmp/gitlab-nodeport-values-v5.1.yaml
+cat /tmp/gitlab-nodeport-values-v5.2.yaml
 
 section "🦊 Install GitLab"
 set +e
@@ -314,7 +314,7 @@ helm upgrade --install gitlab gitlab/gitlab \
   --namespace "${GITLAB_NAMESPACE}" \
   --create-namespace \
   --version "${GITLAB_CHART_VERSION}" \
-  -f /tmp/gitlab-nodeport-values-v5.1.yaml \
+  -f /tmp/gitlab-nodeport-values-v5.2.yaml \
   --wait=false \
   --timeout "${HELM_TIMEOUT}"
 HELM_RC=$?
