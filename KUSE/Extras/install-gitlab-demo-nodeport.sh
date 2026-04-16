@@ -2,7 +2,7 @@
 set -Eeuo pipefail
 
 ###############################################################################
-# install-gitlab-demo-nodeport.sh
+# install-gitlab-demo-nodeport-v5.1.sh
 #
 # Funktionaler GitLab-Demo-Stand für Bare-Metal-Lab / virtuelle Workstation:
 # - kein DNS nötig (/etc/hosts wird lokal auf dieser Workstation gepflegt)
@@ -20,6 +20,9 @@ set -Eeuo pipefail
 # - KAS global deaktiviert
 # - Legacy-Bitnami-Repositories für PostgreSQL/Redis
 # - Helm-Install darf fehlschlagen, wenn Kernpods danach trotzdem gesund sind
+#
+# Wichtig:
+# - /etc/hosts muss auf eine K8s-Node-IP zeigen, NICHT auf die Workstation-IP
 ###############################################################################
 
 DEMO_DOMAIN="${DEMO_DOMAIN:-k8s.lan}"
@@ -90,6 +93,28 @@ wait_for_namespace_deletion() {
   done
   echo "ERROR: namespace '$ns' still exists after waiting" >&2
   return 1
+}
+
+detect_node_access_ip() {
+  if [[ -n "${ACCESS_IP}" ]]; then
+    echo "ℹ️  Verwende vorgegebenes ACCESS_IP=${ACCESS_IP}"
+    return
+  fi
+
+  if kubectl get node kube-1 >/dev/null 2>&1; then
+    ACCESS_IP="$(kubectl get node kube-1 -o jsonpath='{.status.addresses[?(@.type=="InternalIP")].address}')"
+  fi
+
+  if [[ -z "${ACCESS_IP}" ]]; then
+    ACCESS_IP="$(kubectl get nodes -o jsonpath='{.items[0].status.addresses[?(@.type=="InternalIP")].address}')"
+  fi
+
+  if [[ -z "${ACCESS_IP}" ]]; then
+    echo "ERROR: Konnte keine Node InternalIP automatisch ermitteln" >&2
+    exit 1
+  fi
+
+  echo "ℹ️  Automatisch erkannte Node-IP für NodePort-Zugriff: ${ACCESS_IP}"
 }
 
 update_hosts_entry() {
@@ -198,7 +223,7 @@ kubectl -n "${GITLAB_NAMESPACE}" create secret generic gitlab-root-password \
 
 section "📝 GitLab values"
 
-cat >/tmp/gitlab-nodeport-values-v5.yaml <<EOF
+cat >/tmp/gitlab-nodeport-values-v5.1.yaml <<EOF
 global:
   hosts:
     domain: ${DEMO_DOMAIN}
@@ -281,7 +306,7 @@ minio:
     size: ${MINIO_SIZE}
 EOF
 
-cat /tmp/gitlab-nodeport-values-v5.yaml
+cat /tmp/gitlab-nodeport-values-v5.1.yaml
 
 section "🦊 Install GitLab"
 set +e
@@ -289,7 +314,7 @@ helm upgrade --install gitlab gitlab/gitlab \
   --namespace "${GITLAB_NAMESPACE}" \
   --create-namespace \
   --version "${GITLAB_CHART_VERSION}" \
-  -f /tmp/gitlab-nodeport-values-v5.yaml \
+  -f /tmp/gitlab-nodeport-values-v5.1.yaml \
   --wait=false \
   --timeout "${HELM_TIMEOUT}"
 HELM_RC=$?
@@ -309,6 +334,7 @@ kubectl -n "${GITLAB_NAMESPACE}" get events --sort-by=.lastTimestamp | tail -n 4
 helm get values gitlab -n "${GITLAB_NAMESPACE}" || true
 helm status gitlab -n "${GITLAB_NAMESPACE}" || true
 
+detect_node_access_ip
 update_hosts_entry
 print_access_hint
 
