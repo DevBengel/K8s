@@ -2,7 +2,7 @@
 set -Eeuo pipefail
 
 ###############################################################################
-# install-gitlab-runner-autocache.sh
+# install-gitlab-runner-autocache-v2.sh
 #
 # Ziel:
 # - GitLab Runner im Cluster installieren
@@ -11,18 +11,18 @@ set -Eeuo pipefail
 # - privileged Builds
 # - MinIO/S3 Cache verwenden
 #
-# Passend zu:
-# - GitLab via Helm in Namespace gitlab
-# - GitLab erreichbar über http://gitlab.k8s.lan:30080
-# - MinIO im GitLab-Release aktiv
+# WICHTIG:
+# - Runner nutzt den internen GitLab-Service im Cluster
+# - NICHT den externen NodePort / Workstation-Hostnamen
 ###############################################################################
 
 GITLAB_NAMESPACE="${GITLAB_NAMESPACE:-gitlab}"
 RUNNER_NAMESPACE="${RUNNER_NAMESPACE:-gitlab-runner}"
 
-GITLAB_HOST="${GITLAB_HOST:-gitlab.k8s.lan}"
-GITLAB_PORT="${GITLAB_PORT:-30080}"
-GITLAB_URL="${GITLAB_URL:-http://${GITLAB_HOST}:${GITLAB_PORT}}"
+# Interner Service-Zugriff für Pods im Cluster
+GITLAB_INTERNAL_HOST="${GITLAB_INTERNAL_HOST:-gitlab-webservice-default.${GITLAB_NAMESPACE}.svc}"
+GITLAB_INTERNAL_PORT="${GITLAB_INTERNAL_PORT:-8181}"
+GITLAB_URL="${GITLAB_URL:-http://${GITLAB_INTERNAL_HOST}:${GITLAB_INTERNAL_PORT}}"
 
 RUNNER_RELEASE_NAME="${RUNNER_RELEASE_NAME:-gitlab-runner}"
 RUNNER_NAME="${RUNNER_NAME:-k8s-runner}"
@@ -121,32 +121,37 @@ discover_runner_token
 
 if [[ -z "${RUNNER_TOKEN}" ]]; then
   echo
-  echo "👉 Bitte Runner Registration Token manuell aus GitLab setzen."
-  echo "   Alternativ per ENV:"
-  echo "   RUNNER_TOKEN='TOKEN' ./install-gitlab-runner-autocache.sh"
+  echo "👉 Bitte Runner Registration Token manuell setzen."
+  echo "   Beispiel:"
+  echo "   RUNNER_TOKEN='TOKEN' ./install-gitlab-runner-autocache-v2.sh"
   echo
-  echo "   GitLab UI: Admin / CI/CD / Runners"
   exit 1
 fi
 
 discover_minio_credentials
 
-section "🧱 Namespace"
-kubectl get ns "${RUNNER_NAMESPACE}" >/dev/null 2>&1 || kubectl create ns "${RUNNER_NAMESPACE}"
+section "🧹 Runner Namespace reset"
+kubectl delete ns "${RUNNER_NAMESPACE}" --ignore-not-found=true
+for _ in {1..120}; do
+  if ! kubectl get ns "${RUNNER_NAMESPACE}" >/dev/null 2>&1; then
+    break
+  fi
+  sleep 2
+done
+kubectl create ns "${RUNNER_NAMESPACE}"
+
+section "🔐 Cache Secret anlegen"
+kubectl -n "${RUNNER_NAMESPACE}" create secret generic runner-cache-s3 \
+  --from-literal=accesskey="${MINIO_ACCESS_KEY}" \
+  --from-literal=secretkey="${MINIO_SECRET_KEY}"
 
 section "📚 Helm Repo"
 helm repo add gitlab https://charts.gitlab.io >/dev/null 2>&1 || true
 helm repo update
 
-section "🔐 Cache Secret anlegen"
-kubectl -n "${RUNNER_NAMESPACE}" create secret generic runner-cache-s3 \
-  --from-literal=accesskey="${MINIO_ACCESS_KEY}" \
-  --from-literal=secretkey="${MINIO_SECRET_KEY}" \
-  --dry-run=client -o yaml | kubectl apply -f -
-
 section "📝 Runner Values"
 
-cat >/tmp/gitlab-runner-autocache-values.yaml <<EOF
+cat >/tmp/gitlab-runner-autocache-values-v2.yaml <<EOF
 gitlabUrl: ${GITLAB_URL}
 runnerRegistrationToken: "${RUNNER_TOKEN}"
 
@@ -165,7 +170,9 @@ runners:
   locked: false
   runUntagged: true
   protected: false
-  secret: runner-cache-s3
+
+  cache:
+    secretName: runner-cache-s3
 
   config: |
     [[runners]]
@@ -194,13 +201,13 @@ runners:
           AuthenticationType = "access-key"
 EOF
 
-cat /tmp/gitlab-runner-autocache-values.yaml
+cat /tmp/gitlab-runner-autocache-values-v2.yaml
 
 section "🚀 Install GitLab Runner"
 helm upgrade --install "${RUNNER_RELEASE_NAME}" gitlab/gitlab-runner \
   -n "${RUNNER_NAMESPACE}" \
   --version "${RUNNER_CHART_VERSION}" \
-  -f /tmp/gitlab-runner-autocache-values.yaml \
+  -f /tmp/gitlab-runner-autocache-values-v2.yaml \
   --wait
 
 section "📌 Status"
@@ -208,9 +215,12 @@ kubectl -n "${RUNNER_NAMESPACE}" get pods -o wide
 kubectl -n "${RUNNER_NAMESPACE}" get deploy
 helm ls -n "${RUNNER_NAMESPACE}"
 
-section "🧪 GitLab Hinweise"
+section "🧪 Logs"
+kubectl -n "${RUNNER_NAMESPACE}" logs deploy/"${RUNNER_RELEASE_NAME}" --tail=100 || true
+
+section "🧪 Hinweise"
 cat <<EOF
-GitLab:
+Interner GitLab-Zugriff des Runners:
   ${GITLAB_URL}
 
 Runner Namespace:
