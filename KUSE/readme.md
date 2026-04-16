@@ -18,4 +18,6 @@ chmod +x ./K8s/KUSE/bootstrap_helm.sh && \
 chmod +x ./K8s/KUSE/Extras/install-gitlab-demo-nodeport.sh && \
 ACCESS_IP=$(ip route get 1 | awk '{print $7; exit}') \
 ./K8s/KUSE/Extras/install-gitlab-demo-nodeport.sh
+chmod +x ./K8s/KUSE/Extras/install-gitlab-demo-runner.sh
+./K8s/KUSE/Extras/install-gitlab-demo-runner.sh
 ```
