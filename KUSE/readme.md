@@ -15,7 +15,7 @@ rm -rf K8s
 git clone https://github.com/DevBengel/K8s.git && \
 chmod +x ./K8s/KUSE/bootstrap_helm.sh && \
 ./K8s/KUSE/bootstrap_helm.sh && \
-chmod +x ./K8s/KUSE/Extras/install-gitlab-demo-nodeport-v5.sh && \
+chmod +x ./K8s/KUSE/Extras/install-gitlab-demo-nodeport.sh && \
 ACCESS_IP=$(ip route get 1 | awk '{print $7; exit}') \
-./K8s/KUSE/Extras/install-gitlab-demo-nodeport-v5.sh
+./K8s/KUSE/Extras/install-gitlab-demo-nodeport.sh
 ```
