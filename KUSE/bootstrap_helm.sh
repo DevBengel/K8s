@@ -16,13 +16,14 @@ set -Eeuo pipefail
 # - Kubernetes-Repo-Keyring wird frisch aufgebaut
 # - unattended-upgrades / apt-daily werden im Lab deaktiviert
 # - APT/DPKG-Lock-Handling
+# - Ubuntu-Mirror-/BADSIG-Recovery für jammy-backports / nova.clouds
 # - containerd mit SystemdCgroup=true
 # - Idempotenteres /etc/hosts
 # - Optionaler RESET-Modus
 # - kubeadm init mit expliziter --kubernetes-version
 # - Calico via Tigera Operator
 # - PHASE 7: lokales kubectl passend zur Cluster-Version + kubeconfig
-# - PHASE 8: lokales helm + optionale Standard-Repos
+# - PHASE 8: lokales helm + Standard-Repos
 ###############################################################################
 
 # ----------------------------- User input -----------------------------
@@ -257,6 +258,7 @@ for n in "${NODES[@]}"; do
     '  sudo systemctl disable unattended-upgrades apt-daily.service apt-daily-upgrade.service 2>/dev/null || true' \
     '  sudo systemctl disable apt-daily.timer apt-daily-upgrade.timer 2>/dev/null || true' \
     '  echo '\''APT::Periodic::Enable "0";'\'' | sudo tee /etc/apt/apt.conf.d/10disable-periodic >/dev/null' \
+    '  echo '\''Acquire::Retries "3";'\'' | sudo tee /etc/apt/apt.conf.d/80-retries >/dev/null' \
     '  sudo pkill -f unattended-upgrade 2>/dev/null || true' \
     '  sudo pkill -f apt.systemd.daily 2>/dev/null || true' \
     '  sleep 2' \
@@ -264,11 +266,51 @@ for n in "${NODES[@]}"; do
     '  sudo apt-get -f install -y || true' \
     '}' \
     '' \
+    'fix_ubuntu_repo_badsig() {' \
+    '  echo "Attempting Ubuntu repository recovery..."' \
+    '' \
+    '  echo "-- time --"' \
+    '  date || true' \
+    '  timedatectl status 2>/dev/null || true' \
+    '  sudo timedatectl set-ntp true 2>/dev/null || true' \
+    '' \
+    '  echo "-- clean apt state --"' \
+    '  sudo rm -rf /var/lib/apt/lists/*' \
+    '  sudo apt-get clean' \
+    '' \
+    '  echo "-- disable jammy-backports for lab robustness --"' \
+    '  sudo sed -i '\''/^[[:space:]]*deb .* jammy-backports / s/^/# /'\'' /etc/apt/sources.list 2>/dev/null || true' \
+    '  sudo find /etc/apt/sources.list.d -maxdepth 1 -type f -print0 2>/dev/null | xargs -0 -r sudo sed -i '\''/^[[:space:]]*deb .* jammy-backports / s/^/# /'\'' || true' \
+    '' \
+    '  echo "-- replace nova.clouds mirror with archive.ubuntu.com --"' \
+    '  sudo sed -i '\''s|http://nova.clouds.archive.ubuntu.com/ubuntu|http://archive.ubuntu.com/ubuntu|g'\'' /etc/apt/sources.list 2>/dev/null || true' \
+    '  sudo find /etc/apt/sources.list.d -maxdepth 1 -type f -print0 2>/dev/null | xargs -0 -r sudo sed -i '\''s|http://nova.clouds.archive.ubuntu.com/ubuntu|http://archive.ubuntu.com/ubuntu|g'\'' || true' \
+    '' \
+    '  echo "-- apt sources after normalization --"' \
+    '  sudo grep -R "ubuntu" /etc/apt/sources.list /etc/apt/sources.list.d/* 2>/dev/null || true' \
+    '}' \
+    '' \
+    'apt_update_resilient() {' \
+    '  wait_for_apt || force_clear_apt' \
+    '  wait_for_apt' \
+    '' \
+    '  if sudo apt-get update; then' \
+    '    return 0' \
+    '  fi' \
+    '' \
+    '  echo "First apt-get update failed -> running repo recovery"' \
+    '  fix_ubuntu_repo_badsig' \
+    '  wait_for_apt || force_clear_apt' \
+    '  wait_for_apt' \
+    '  sudo apt-get update' \
+    '}' \
+    '' \
     'echo "== [PRE] Disable unattended upgrades for lab environment =="' \
     'sudo systemctl stop unattended-upgrades apt-daily.service apt-daily-upgrade.service 2>/dev/null || true' \
     'sudo systemctl disable unattended-upgrades apt-daily.service apt-daily-upgrade.service 2>/dev/null || true' \
     'sudo systemctl disable apt-daily.timer apt-daily-upgrade.timer 2>/dev/null || true' \
     'echo '\''APT::Periodic::Enable "0";'\'' | sudo tee /etc/apt/apt.conf.d/10disable-periodic >/dev/null' \
+    'echo '\''Acquire::Retries "3";'\'' | sudo tee /etc/apt/apt.conf.d/80-retries >/dev/null' \
     'sudo pkill -f unattended-upgrade 2>/dev/null || true' \
     'sudo pkill -f apt.systemd.daily 2>/dev/null || true' \
     'sleep 2' \
@@ -334,12 +376,10 @@ for n in "${NODES[@]}"; do
     'fi' \
     '' \
     'echo "== [C] Base packages =="' \
+    'apt_update_resilient' \
     'wait_for_apt || force_clear_apt' \
     'wait_for_apt' \
-    'sudo apt-get update' \
-    'wait_for_apt || force_clear_apt' \
-    'wait_for_apt' \
-    'sudo apt-get install -y ca-certificates curl gpg apt-transport-https software-properties-common psmisc' \
+    'sudo apt-get install -y ca-certificates curl gpg apt-transport-https software-properties-common psmisc ubuntu-keyring' \
     '' \
     'echo "== [F] Disable swap =="' \
     'sudo swapoff -a || true' \
@@ -355,9 +395,7 @@ for n in "${NODES[@]}"; do
     'sudo sysctl --system >/dev/null || true' \
     '' \
     'echo "== [I] Install containerd =="' \
-    'wait_for_apt || force_clear_apt' \
-    'wait_for_apt' \
-    'sudo apt-get update' \
+    'apt_update_resilient' \
     'wait_for_apt || force_clear_apt' \
     'wait_for_apt' \
     'sudo apt-get install -y containerd' \
@@ -368,9 +406,7 @@ for n in "${NODES[@]}"; do
     'sudo systemctl restart containerd' \
     '' \
     'echo "== [J] Install Kubernetes packages =="' \
-    'wait_for_apt || force_clear_apt' \
-    'wait_for_apt' \
-    'sudo apt-get update' \
+    'apt_update_resilient' \
     'wait_for_apt || force_clear_apt' \
     'wait_for_apt' \
     'sudo apt-get install -y kubeadm kubelet kubectl cri-tools' \
@@ -590,7 +626,7 @@ echo "== [7G] Install local helm ${HELM_VERSION} =="
 curl -fsSL --retry 3 --retry-delay 1 -o /tmp/helm.tar.gz "https://get.helm.sh/helm-${HELM_VERSION}-linux-amd64.tar.gz"
 curl -fsSL --retry 3 --retry-delay 1 -o /tmp/helm.sha256sum "https://get.helm.sh/helm-${HELM_VERSION}-linux-amd64.tar.gz.sha256sum"
 
-EXPECTED_HELM_SHA="$(cat /tmp/helm.sha256sum | awk '{print $1}')"
+EXPECTED_HELM_SHA="$(awk '{print $1}' /tmp/helm.sha256sum)"
 ACTUAL_HELM_SHA="$(sha256sum /tmp/helm.tar.gz | awk '{print $1}')"
 
 if [[ "${EXPECTED_HELM_SHA}" != "${ACTUAL_HELM_SHA}" ]]; then
