@@ -2,6 +2,8 @@ Um das Cluster vorzubereiten einfach die unten stehende Befehle per Copy & Paste
 in den Terminal Student Workstation kopieren.
 
 ```sh
+rm -rf K8s
+
 git clone https://github.com/DevBengel/K8s.git
 chmod +x ./K8s/KUSE/bootstrap.sh
 ./K8s/KUSE/bootstrap.sh
