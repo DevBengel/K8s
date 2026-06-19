@@ -2123,7 +2123,7 @@ helm -n falco upgrade falco falcosecurity/falco \
   --set falcosidekick.config.webhook.minimumpriority="debug"
 ```
 
-> **Hinweis (didaktisch):** `minimumpriority=debug` sorgt dafür, dass Sie praktisch alles siehst. 
+> **Hinweis :** `minimumpriority=debug` sorgt dafür, dass Sie praktisch alles siehst. 
 > In der Praxis würden Sie eher `warning` oder `error` wählen.
 
 ### 2.3 Sidekick neu starten (damit Config sofort aktiv ist)
@@ -2137,7 +2137,7 @@ kubectl -n falco rollout status deploy -l app.kubernetes.io/name=falcosidekick
 
 ## 3) Funktionstest: Falco Event auslösen
 
-Falls der Demo-Pod aus Lab 8 nicht mehr existiert, deploye ihn neu:
+Falls der Demo-Pod aus Lab 8 nicht mehr existiert, deployen Sie ihn neu:
 
 ```bash
 cat <<'EOF' > runtime-demo.yaml
@@ -2169,7 +2169,7 @@ kubectl exec -n default -it runtime-demo -- sh -lc 'apk add --no-cache curl'
 
 ### 4.1 Receiver-Logs (default Namespace)
 
-In der Receiver-Log-Session solltest Sie **eingehende POSTs** sehen, inklusive JSON Payload.
+In der Receiver-Log-Session sollten Sie **eingehende POSTs** sehen, inklusive JSON Payload.
 
 ### 4.2 Sidekick-Logs (falco Namespace)
 
@@ -2193,9 +2193,9 @@ Falcosidekick schickt typischerweise einen JSON-Body mit Feldern wie:
 - `rule`, `priority`, `output`, `time`
 - Kubernetes-Kontext (`k8s.ns.name`, `k8s.pod.name`, …) – abhängig von Falco Setup
 
-Sie brauchst für den Kurs nicht jedes Feld, aber merke Ihnen:
+Sie brauchen für den Kurs nicht jedes Feld, aber merken Sie sich:
 
-> **In der Praxis ist das der Moment, wo Sie mappst:** 
+> **In der Praxis ist das der Moment, wo Sie mappen:** 
 > Rule → Severity → Routing (PagerDuty/Slack/SIEM) → Ticket/Incident
 
 ---
