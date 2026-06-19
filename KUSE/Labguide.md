@@ -2108,7 +2108,7 @@ helm -n falco list
 ```
 
 In den meisten Labs heißt das Release einfach `falco`. 
-Falls es anders heißt, ersetze im nächsten Schritt den Namen entsprechend.
+Falls es anders heißt, ersetzen Sie im nächsten Schritt den Namen entsprechend.
 
 ### 2.2 Upgrade mit Webhook-Output
 
