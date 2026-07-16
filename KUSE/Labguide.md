@@ -1782,9 +1782,9 @@ Erwartung: Admission wird blockiert.
 
 ## Ziel dieses Labs
 
-In diesem Lab lernst Sie, warum **Runtime Security** ein unverzichtbarer Bestandteil moderner Kubernetes-Sicherheitskonzepte ist – selbst dann, wenn Admission Policies, Pod Security Standards und Image-Scans korrekt umgesetzt sind.
+In diesem Lab lernen Sie, warum **Runtime Security** ein unverzichtbarer Bestandteil moderner Kubernetes-Sicherheitskonzepte ist – selbst dann, wenn Admission Policies, Pod Security Standards und Image-Scans korrekt umgesetzt sind.
 
-Sie installieren **Falco** als Runtime-Sensor im Cluster, erzeugst gezielt sicherheitsrelevantes Verhalten und beobachtest, wie Falco dieses Verhalten erkennt und sichtbar macht. 
+Sie installieren **Falco** als Runtime-Sensor im Cluster, erzeugen gezielt sicherheitsrelevantes Verhalten und beobachten, wie Falco dieses Verhalten erkennt und sichtbar macht. 
 Im Bonus-Teil werden die erkannten Events zusätzlich über **Falcosidekick** in einer Web-Oberfläche dargestellt.
 
 ---
@@ -2005,7 +2005,7 @@ In der UI sollte nun ein Event zum Pod `runtime-demo` sichtbar sein.
 
 ## ❓ Reflexionsfragen
 
-1. Welche Falco-Events wären in deiner Umgebung besonders kritisch?
+1. Welche Falco-Events wären in Ihrer Umgebung besonders kritisch?
 2. Wo würden Sie Falco-Events weiterleiten?
 3. Warum ist Runtime Detection kein Ersatz für Admission Security?
 
@@ -2043,7 +2043,7 @@ Webhook ist der „kleinste gemeinsame Nenner“:
 ## 1) Webhook-Receiver deployen
 
 Wir starten einen simplen HTTP-Echo-Server, der Requests annimmt und Log-Ausgaben macht.
-Der Pod läuft im Namespace `default`, damit Sie nichts im `falco` Namespace verwechselst.
+Der Pod läuft im Namespace `default`.
 
 ```bash
 cat <<'EOF' > webhook-receiver.yaml
@@ -2123,7 +2123,7 @@ helm -n falco upgrade falco falcosecurity/falco \
   --set falcosidekick.config.webhook.minimumpriority="debug"
 ```
 
-> **Hinweis :** `minimumpriority=debug` sorgt dafür, dass Sie praktisch alles siehst. 
+> **Hinweis :** `minimumpriority=debug` sorgt dafür, dass Sie praktisch alles sehen. 
 > In der Praxis würden Sie eher `warning` oder `error` wählen.
 
 ### 2.3 Sidekick neu starten (damit Config sofort aktiv ist)
