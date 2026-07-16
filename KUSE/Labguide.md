@@ -366,7 +366,7 @@ Erwartung: `yes`
 - Warum ist `exec` eine Subresource?
 - Warum ist das Verb `create`?
 
-<kubernetes.io/docs/reference/access-authn-authz/rbac/#referring-to-resources>
+(kubernetes.io/docs/reference/access-authn-authz/rbac/#referring-to-resources)
 
 ---
 
