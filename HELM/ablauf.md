@@ -11,6 +11,10 @@
 - 🔎 **CHECKPOINT** – Verständnis prüfen / Ergebnis gemeinsam kontrollieren
 - ⭐ **OPTIONAL** – nur bei ausreichender Zeit
 
+**Playground-Quelle:** [HELM/links.md](https://github.com/DevBengel/K8s/blob/main/HELM/links.md)
+
+> Zuordnung: P.1–P.6 = bisherige Demos 1–6, P.8 = bisherige Demo 7, P.9 = bisherige Demo 8. **P.7 (`with`) ist neu und hat noch keine URL.**
+
 ---
 
 # Gesamtfortschritt
@@ -208,12 +212,16 @@ Helm verwaltet den Zustand als Release
 
 ### 🧪 P.1 – `.Values` und `.Release`
 
+**Direkt öffnen:** [Helm Playground – P.1](https://helm-playground.com/#t=IYBwlgagpgTgzmA9gOwFwAIBuBGAUAazGQBMMBhFAMzAHMBZUXAWygBdhjh3Vd11lgLDAG9h6AHQAlKABsowOFHEA5QVHQBfDQFoAxlVq5O3XuijJMYGChbJWIseIjAZAVyhxx5y9eS3W6AA%2B6ACOrois6lqmMFAgMmC6Cg4Szm4e4rHxicAUrnZBoeGRmhpAA&v=KYOwbglgTg9iC2oAuAuABAB1gEwK4GMkI4AoKYDAGwnwEMBhGXEVNARiA)
+
 - [ ] `.Values` demonstrieren
 - [ ] `.Release.Name` demonstrieren
 - [ ] vor dem Rendern Ergebnis schätzen lassen
 - [ ] anschließend Renderergebnis zeigen
 
 ### 🧪 P.2 – Pipelines
+
+**Direkt öffnen:** [Helm Playground – P.2](https://helm-playground.com/#t=IYBwlgagpgTgzmA9gOwFwAIBuBGAUAazGQBMMBhFAMzAHMBZUXAWygBdhjh3Vd11lgLDAG9h6AHQAlKABsowOFHEA5QVHQBfDQFoAxlVq5O3XukQxaRYDJFjxEawFcoccaBCqW6AD7oAjo6IrOpapo4gILC2Eg4yzq7unuq%2B4ZEwPv6BwZoapjKIAO5R6KIxTi5uEUkZ%2BUXpvgFBIbl8MFCRXNH25QlVahltHazoAMwZjdlaQA&v=IYBxDlgWwUwLgAQGUCuIYCcDqMBGBBMIA)
 
 - [ ] einfache Funktion zeigen
 - [ ] gleiche Funktion als Pipeline schreiben
@@ -271,6 +279,8 @@ Helm verwaltet den Zustand als Release
 
 ### 🧪 P.3 – `default`
 
+**Direkt öffnen:** [Helm Playground – P.3](https://helm-playground.com/#t=IYBwlgagpgTgzmA9gOwFwAIBuBGAUAazGQBMMBhFAMzAHMBZUXAWygBdhjh3Vd11lgLDAG9h6AHQAlKABsowOFHEA5QVHQBfDQFoAxlVq5O3XuijJMYGChbJWIseIjAZAVyhxx5y9eS3W6AA%2B6MRQlMCuMgEARKGYsogg-tFB6ACOrois6lqmMog0ADJQ8TIOEs5uHuL5RSWyqaHhkTFElIgpwRlZORpAA&v=KYOwbglgTg9iC2oAuAuABAB1gEwK4GMkI4g)
+
 - [ ] Value vorhanden → vorhandenen Wert verwenden
 - [ ] Value fehlt → Default verwenden
 - [ ] Ergebnis vor dem Rendern schätzen lassen
@@ -294,6 +304,8 @@ Helm verwaltet den Zustand als Release
 
 ### 🧪 P.4 – `if`
 
+**Direkt öffnen:** [Helm Playground – P.4](https://helm-playground.com/#t=N7C0AIEsDNwOgGoEMA2BXApgZzljAnAN0gGMM4MA7JAIxQwBNwBfZgKCQAdIECtIA9pQBc4QgEY2Aa0iUGogMoFiZNgFsMAFyQMk24W3DhqG0SHgAlDPSR44AOSQaW7LJwwkDRzQE93Z4HhkdGxcZVJyX3cXQ3A8ehJNAXwvI3AuTgDLawxbckdnVljOZM0sVKMIEvxNLMRUTBw8Igi4as0YtLTtfABzLQAFUtEADgAGcbYQCComViA&v=M4UwTgbglgxiBcAoABMkA7AhgIwDYgBN5kAXMAVxBVIE8AHBZAYV3OBPAEkAFaugezAliADgAMQA)
+
 - [ ] Ressource/Block bei `true` rendern
 - [ ] Value auf `false` setzen
 - [ ] Unterschied im Renderergebnis zeigen
@@ -312,6 +324,8 @@ Helm verwaltet den Zustand als Release
 
 ### 🧪 P.5 – `range`
 
+**Direkt öffnen:** [Helm Playground – P.5](https://helm-playground.com/#t=IYBwlgagpgTgzmA9gOwFwAIBuBGAUAazGQBMMBhFAMzAHMBZUXAWygBdhjh3Vd11lgLDAG9h6AHQAlKABsowOFHEA5QVHQBfDQFpK81gFcYUOLk7dco7ehjBkNdeIjAZBk%2BL1cjJzRt7pRCQEWXxExcSgBACM5YnQAH3QARwNEVnUtS2FrSLitIA&v=GYUwhgLgrgTiDOAuAUAAlQWlQOzAWxEVQBsB7AcwEts11URcAjYkAEyIhihFq1wKIAHMAE8C2CLXQMwzNkWBhi8Huj75CqVmBgBrPKVaq6Mue1SduQA)
+
 - [ ] über Liste iterieren
 - [ ] aktuellen Kontext `.` beobachten
 
@@ -324,6 +338,8 @@ Helm verwaltet den Zustand als Release
 ## 13:30–14:30 | 🎓 + 🧪 + 🛠️ Kontext und Scope
 
 ### 🧪 P.6 – Kontextfalle: `.` und `$`
+
+**Direkt öffnen:** [Helm Playground – P.6](https://helm-playground.com/#t=IYBwlgagpgTgzmA9gOwFwAIBuBGAUAazGQBMMBhFAMzAHMBZUXAWygBdhjh3Vd11lgLDAG9h6AHQAlKABsowOFHEA5QVHQBfDQFpFMTGADGUOLk7dco7ehjBkNdeIjAZAVxPi9B43E0be6KISAix%2BImJSsvKKKmroAD7oAI6uiKzqWpbC1lAkfkA&v=M4UwTgbglgxiwC4BQACFBaFA7AhgWxARQDMwB7LAFxCwBNUNt9CUAjHGAaxvrU1wJFaOSjnaggA)
 
 - [ ] funktionierende Iteration zeigen
 - [ ] `.Release.Name` innerhalb von `range` absichtlich verwenden
@@ -343,11 +359,15 @@ Helm verwaltet den Zustand als Release
 
 ### 🧪 P.7 – `with`
 
+> **Noch keine Playground-URL vorhanden.** P.7 (`with`) ist eine neue Ergänzung und sollte noch als eigener Playground angelegt werden.
+
 - [ ] `.Values.application` als neuen Kontext setzen
 - [ ] `.name` innerhalb von `with`
 - [ ] Zugriff auf `$.Release.Name`
 
 ### 🧪 P.8 – mehrere Ressourcen mit `range`
+
+**Direkt öffnen:** [Helm Playground – P.8](https://helm-playground.com/#t=N7C0AICcEMDsHMCm4B0A1aAbArogzitAA5F7gC%2B5AUKLVcQJZqKR4MD2sAXOMaQPQA3AIxUA1g1gATHgBFERTOwCeAW0SwALlXWboU6Hq5Vw4WNHU8Q4ACQoASokyJoeRCgByF5JVDWU5uoU1HhEiADGxqaQCpgM4a5WwKgxivGuwSbgbs7hmuyQUabgqobhABYAMtAARk54RcW8JEm2Dk4ubp7ewX7JAT2UWZqIqoqGiI0liHoGRllNmLX1U018rXaOzq7uXkG%2B-oE%2B1E2hEavg4Zx6kiwNC03gEEetA-snj00MpUg8CJIADy4-kEdw4sEyIAgGikwSAA&v=IYBxGcC4CgAJYLSwHbALYFNKwGYCcB7ZAFw2QBM55Y8MQAbASwGNgpYBmK%2BANwz3CMi2AEQBGAHQAmABwjoVJKkzYARsGYBrMpWo06TVuyndYfAUOSjJUgOzzFKdFljByaRslO0GLNtjFTc0FhWHFpADYRIA)
 
 - [ ] mehrere Deployments/Ressourcen aus einer Liste erzeugen
 - [ ] `---` zwischen YAML-Dokumenten
@@ -378,6 +398,8 @@ Helm verwaltet den Zustand als Release
 - [ ] `toYaml`
 
 ### 🧪 P.9 – `toYaml` und `nindent`
+
+**Direkt öffnen:** [Helm Playground – P.9](https://helm-playground.com/#t=IYBwlgagpgTgzmA9gOwFwAJQjgegG4CMAUANZjIAmGAIlCADaICeAtlMgC5FsfAXC9URdOmTA2GAN6T0AOgBKUelGBwosgHLio6AL66icEFADGQkTDr0wJ1VJmyIwegFcocWZYY3gAYUQunHoGImrKJhyIMOYi6CwCJgAWADLAAEZKcDGxmCAg9nKKyqrqWmzBwugcUCwMAlDZcVC8-IKVOfTpmY05WAUKSipqmtoVOUamPegmKLzksFntOegAtKLaGMgA5uQAHkvL6GDxWw2iO8i7qASyAEwAHAfLlnABMCbuQtJViACa4vQ5E5XO5PO43h84OgAD6icgUdgcdAEW7BIA&v=E4UwDgNglgxghgYQPYFcB2AXAXAAgMwBQBoAzqsDCCVgTjqAI4pUbW104xgq4CMADPwC27OkJBCkwAJ58ATAA4AslHbQhUVjQ6duuAKyCRO8ZJkHeclUA)
 
 - [ ] komplexe Values-Struktur rendern
 - [ ] `toYaml` erklären
@@ -694,17 +716,17 @@ Pipeline
 
 # Separate Fortschrittsübersicht – Playground
 
-| Status | ID | Playground | Schwerpunkt | Tag |
-|---|---|---|---|---:|
-| [ ] | P.1 | `.Values` und `.Release` | Built-in Objects | 1 |
-| [ ] | P.2 | Pipelines | Funktionen / Datenfluss | 1 |
-| [ ] | P.3 | `default` | Fallback-Werte | 2 |
-| [ ] | P.4 | `if` | Bedingungen | 2 |
-| [ ] | P.5 | `range` | Iteration | 2 |
-| [ ] | P.6 | `.` und `$` | Kontext / Root Scope | 2 |
-| [ ] | P.7 | `with` | Kontextwechsel | 2 |
-| [ ] | P.8 | mehrere Ressourcen | `range` in realer Struktur | 2 |
-| [ ] | P.9 | `toYaml` + `nindent` | komplexe YAML-Strukturen | 2 |
+| Status | ID | Playground | Schwerpunkt | Tag | Direkt |
+|---|---|---|---|---:|---|
+| [ ] | P.1 | `.Values` und `.Release` | Built-in Objects | 1 | [öffnen](https://helm-playground.com/#t=IYBwlgagpgTgzmA9gOwFwAIBuBGAUAazGQBMMBhFAMzAHMBZUXAWygBdhjh3Vd11lgLDAG9h6AHQAlKABsowOFHEA5QVHQBfDQFoAxlVq5O3XuijJMYGChbJWIseIjAZAVyhxx5y9eS3W6AA%2B6ACOrois6lqmMFAgMmC6Cg4Szm4e4rHxicAUrnZBoeGRmhpAA&v=KYOwbglgTg9iC2oAuAuABAB1gEwK4GMkI4AoKYDAGwnwEMBhGXEVNARiA) |
+| [ ] | P.2 | Pipelines | Funktionen / Datenfluss | 1 | [öffnen](https://helm-playground.com/#t=IYBwlgagpgTgzmA9gOwFwAIBuBGAUAazGQBMMBhFAMzAHMBZUXAWygBdhjh3Vd11lgLDAG9h6AHQAlKABsowOFHEA5QVHQBfDQFoAxlVq5O3XukQxaRYDJFjxEawFcoccaBCqW6AD7oAjo6IrOpapo4gILC2Eg4yzq7unuq%2B4ZEwPv6BwZoapjKIAO5R6KIxTi5uEUkZ%2BUXpvgFBIbl8MFCRXNH25QlVahltHazoAMwZjdlaQA&v=IYBxDlgWwUwLgAQGUCuIYCcDqMBGBBMIA) |
+| [ ] | P.3 | `default` | Fallback-Werte | 2 | [öffnen](https://helm-playground.com/#t=IYBwlgagpgTgzmA9gOwFwAIBuBGAUAazGQBMMBhFAMzAHMBZUXAWygBdhjh3Vd11lgLDAG9h6AHQAlKABsowOFHEA5QVHQBfDQFoAxlVq5O3XuijJMYGChbJWIseIjAZAVyhxx5y9eS3W6AA%2B6MRQlMCuMgEARKGYsogg-tFB6ACOrois6lqmMog0ADJQ8TIOEs5uHuL5RSWyqaHhkTFElIgpwRlZORpAA&v=KYOwbglgTg9iC2oAuAuABAB1gEwK4GMkI4g) |
+| [ ] | P.4 | `if` | Bedingungen | 2 | [öffnen](https://helm-playground.com/#t=N7C0AIEsDNwOgGoEMA2BXApgZzljAnAN0gGMM4MA7JAIxQwBNwBfZgKCQAdIECtIA9pQBc4QgEY2Aa0iUGogMoFiZNgFsMAFyQMk24W3DhqG0SHgAlDPSR44AOSQaW7LJwwkDRzQE93Z4HhkdGxcZVJyX3cXQ3A8ehJNAXwvI3AuTgDLawxbckdnVljOZM0sVKMIEvxNLMRUTBw8Igi4as0YtLTtfABzLQAFUtEADgAGcbYQCComViA&v=M4UwTgbglgxiBcAoABMkA7AhgIwDYgBN5kAXMAVxBVIE8AHBZAYV3OBPAEkAFaugezAliADgAMQA) |
+| [ ] | P.5 | `range` | Iteration | 2 | [öffnen](https://helm-playground.com/#t=IYBwlgagpgTgzmA9gOwFwAIBuBGAUAazGQBMMBhFAMzAHMBZUXAWygBdhjh3Vd11lgLDAG9h6AHQAlKABsowOFHEA5QVHQBfDQFpK81gFcYUOLk7dco7ehjBkNdeIjAZBk%2BL1cjJzRt7pRCQEWXxExcSgBACM5YnQAH3QARwNEVnUtS2FrSLitIA&v=GYUwhgLgrgTiDOAuAUAAlQWlQOzAWxEVQBsB7AcwEts11URcAjYkAEyIhihFq1wKIAHMAE8C2CLXQMwzNkWBhi8Huj75CqVmBgBrPKVaq6Mue1SduQA) |
+| [ ] | P.6 | `.` und `$` | Kontext / Root Scope | 2 | [öffnen](https://helm-playground.com/#t=IYBwlgagpgTgzmA9gOwFwAIBuBGAUAazGQBMMBhFAMzAHMBZUXAWygBdhjh3Vd11lgLDAG9h6AHQAlKABsowOFHEA5QVHQBfDQFpFMTGADGUOLk7dco7ehjBkNdeIjAZAVxPi9B43E0be6KISAix%2BImJSsvKKKmroAD7oAI6uiKzqWpbC1lAkfkA&v=M4UwTgbglgxiwC4BQACFBaFA7AhgWxARQDMwB7LAFxCwBNUNt9CUAjHGAaxvrU1wJFaOSjnaggA) |
+| [ ] | P.7 | `with` | Kontextwechsel | 2 | *noch anzulegen* |
+| [ ] | P.8 | mehrere Ressourcen | `range` in realer Struktur | 2 | [öffnen](https://helm-playground.com/#t=N7C0AICcEMDsHMCm4B0A1aAbArogzitAA5F7gC%2B5AUKLVcQJZqKR4MD2sAXOMaQPQA3AIxUA1g1gATHgBFERTOwCeAW0SwALlXWboU6Hq5Vw4WNHU8Q4ACQoASokyJoeRCgByF5JVDWU5uoU1HhEiADGxqaQCpgM4a5WwKgxivGuwSbgbs7hmuyQUabgqobhABYAMtAARk54RcW8JEm2Dk4ubp7ewX7JAT2UWZqIqoqGiI0liHoGRllNmLX1U018rXaOzq7uXkG%2B-oE%2B1E2hEavg4Zx6kiwNC03gEEetA-snj00MpUg8CJIADy4-kEdw4sEyIAgGikwSAA&v=IYBxGcC4CgAJYLSwHbALYFNKwGYCcB7ZAFw2QBM55Y8MQAbASwGNgpYBmK%2BANwz3CMi2AEQBGAHQAmABwjoVJKkzYARsGYBrMpWo06TVuyndYfAUOSjJUgOzzFKdFljByaRslO0GLNtjFTc0FhWHFpADYRIA) |
+| [ ] | P.9 | `toYaml` + `nindent` | komplexe YAML-Strukturen | 2 | [öffnen](https://helm-playground.com/#t=IYBwlgagpgTgzmA9gOwFwAJQjgegG4CMAUANZjIAmGAIlCADaICeAtlMgC5FsfAXC9URdOmTA2GAN6T0AOgBKUelGBwosgHLio6AL66icEFADGQkTDr0wJ1VJmyIwegFcocWZYY3gAYUQunHoGImrKJhyIMOYi6CwCJgAWADLAAEZKcDGxmCAg9nKKyqrqWmzBwugcUCwMAlDZcVC8-IKVOfTpmY05WAUKSipqmtoVOUamPegmKLzksFntOegAtKLaGMgA5uQAHkvL6GDxWw2iO8i7qASyAEwAHAfLlnABMCbuQtJViACa4vQ5E5XO5PO43h84OgAD6icgUdgcdAEW7BIA&v=E4UwDgNglgxghgYQPYFcB2AXAXAAgMwBQBoAzqsDCCVgTjqAI4pUbW104xgq4CMADPwC27OkJBCkwAJ58ATAA4AslHbQhUVjQ6duuAKyCRO8ZJkHeclUA) |
 
 ---
 
