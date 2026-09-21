@@ -36,7 +36,7 @@ ssh student@kube-1
 
 ---
 
-## 0) Vorbereitung
+## 1) Vorbereitung
 
 Der bewusste Umgang mit Namespaces ist ein zentrales Gestaltungselement in Kubernetes-Clustern.
 Obwohl der default-Namespace technisch voll funktionsfähig ist, wird sein Einsatz außerhalb von Testszenarien nicht empfohlen.
