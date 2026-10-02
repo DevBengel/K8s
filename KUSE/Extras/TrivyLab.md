@@ -125,6 +125,19 @@ RUN apt-get update && \
       ca-certificates && \
     rm -rf /var/lib/apt/lists/*
 
+# Ausschließlich für dieses Security-Lab:
+RUN mkdir -p /opt/demo && \
+    printf '%s\n' \
+      '-----BEGIN OPENSSH PRIVATE KEY-----' \
+      'LAB-DEMO-ONLY-NOT-A-REAL-PRIVATE-KEY' \
+      'LAB-DEMO-ONLY-NOT-A-REAL-PRIVATE-KEY' \
+      'LAB-DEMO-ONLY-NOT-A-REAL-PRIVATE-KEY' \
+      '-----END OPENSSH PRIVATE KEY-----' \
+      > /opt/demo/demo_private_key
+
+# Löschen in einem späteren Layer
+RUN rm /opt/demo/demo_private_key
+
 CMD ["sleep", "infinity"]
 EOF
 ```
@@ -327,48 +340,116 @@ Layer gelöscht werden.
 
 ------------------------------------------------------------------------
 
-## 9. Nach Secrets suchen
+## 9. Gelöschtes Fake-Secret in einem Image-Layer untersuchen
 
-Trivy kann neben bekannten Schwachstellen auch nach möglichen Secrets
-suchen:
+Das Demo-Image enthält bewusst ein **künstliches und nicht verwendbares
+Demo-Secret**. Es wird in einem Image-Layer gespeichert und erst in
+einem späteren Layer gelöscht.
+
+Prüfen Sie zunächst das finale Container-Dateisystem:
+
+``` bash
+sudo docker run --rm vulnerable-demo:1.0 \
+  sh -c 'ls -la /opt/demo; test ! -e /opt/demo/demo_private_key && echo "Secret-Datei ist im finalen Dateisystem gelöscht."'
+```
+
+Die Datei sollte nicht mehr vorhanden sein.
+
+Zeigen Sie anschließend die Image-Historie an:
+
+``` bash
+sudo docker history --no-trunc vulnerable-demo:1.0
+```
+
+``` text
+Layer n      Fake-Secret erzeugen
+   │
+   ▼
+Layer n+1    Fake-Secret löschen
+```
+
+### Trivy Secret Scan
 
 ``` bash
 trivy image \
-  --scanners vuln,secret \
+  --scanners secret \
   vulnerable-demo:1.0
 ```
 
-### Warum ist dies wichtig?
+> **Hinweis:** Secret-Scanner verwenden Erkennungsregeln und
+> Heuristiken. Ein künstliches Muster wird daher nicht zwingend von
+> jeder Trivy-Version identisch erkannt. Der folgende direkte
+> Layer-Nachweis funktioniert unabhängig davon.
 
-Betrachten Sie folgendes problematisches Dockerfile:
+### Gelöschten Inhalt direkt im Image nachweisen
 
-``` dockerfile
-FROM ubuntu
+Exportieren Sie das Image:
 
-COPY password.txt /tmp/password.txt
-RUN rm /tmp/password.txt
+``` bash
+sudo docker save vulnerable-demo:1.0 -o vulnerable-demo.tar
 ```
 
-Obwohl `password.txt` im resultierenden Container-Dateisystem nicht mehr
-sichtbar ist, kann die Datei weiterhin Bestandteil eines älteren
-Image-Layers sein.
+Entpacken Sie das Image:
 
-Vereinfacht:
+``` bash
+rm -rf image-export
+mkdir image-export
+tar -xf vulnerable-demo.tar -C image-export
+```
+
+Suchen Sie in allen exportierten Layern nach dem eindeutigen Demo-Text:
+
+``` bash
+grep -R -a \
+  'LAB-DEMO-ONLY-NOT-A-REAL-PRIVATE-KEY' \
+  image-export
+```
+
+Obwohl die Datei im laufenden Container nicht mehr vorhanden ist, sollte
+der Text in einem älteren Image-Layer auffindbar sein.
+
+### Was ist passiert?
 
 ``` text
 IMAGE
-├── Layer 1
-│   └── tmp/password.txt
 │
-└── Layer 2
-    └── Löschinformation
+├── Layer n
+│     └── /opt/demo/demo_private_key
+│             LAB-DEMO-ONLY-...
+│
+└── Layer n+1
+      └── Datei gelöscht
 ```
 
-Das spätere Löschen einer Datei entfernt deren Inhalt nicht automatisch
-aus bereits erzeugten Layern.
+Das zusammengeführte Container-Dateisystem berücksichtigt die
+Löschinformation. Der Inhalt des bereits erzeugten älteren Layers wird
+dadurch jedoch nicht rückwirkend entfernt.
 
-> **Praxisregel:** Speichern Sie Secrets nicht in Container-Images und
-> nicht in Dockerfile-Layern.
+### Sicherheitsrelevanz
+
+Folgendes Vorgehen ist deshalb **nicht sicher**:
+
+``` dockerfile
+COPY secret.txt /tmp/secret.txt
+RUN do-something-with-secret
+RUN rm /tmp/secret.txt
+```
+
+Das spätere Löschen entfernt das Secret nicht aus vorherigen
+Image-Layern.
+
+> **Merksatz:** „Aus dem Container gelöscht" bedeutet nicht automatisch
+> „aus dem Image entfernt".
+
+### Aufgabe
+
+Beantworten Sie:
+
+1.  Ist `/opt/demo/demo_private_key` im gestarteten Container vorhanden?
+2.  Kann der Demo-Inhalt trotzdem im exportierten Image gefunden werden?
+3.  Warum reicht ein späteres `RUN rm ...` nicht aus?
+4.  Welche Konsequenz ergibt sich daraus für Passwörter, API-Keys,
+    Zertifikate und private Schlüssel beim Image-Build?
 
 ------------------------------------------------------------------------
 
