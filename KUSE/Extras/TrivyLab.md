@@ -2,16 +2,18 @@
 
 ## Ziel
 
-In diesem Lab untersuchen wir Container-Images mit **Trivy** auf
-bekannte Sicherheitsprobleme.
+In diesem Lab untersuchen Sie Container-Images mit **Trivy** auf
+bekannte Sicherheitsprobleme. Zusätzlich erstellen Sie selbst ein
+bewusst ungeeignetes Demo-Image und untersuchen dieses anschließend.
 
-Nach dem Lab können die Teilnehmer:
+Nach dem Lab können Sie:
 
 -   Container-Images auf bekannte Schwachstellen (CVEs) untersuchen.
 -   Findings nach Schweregrad filtern.
 -   zwischen ungefixten und bereits behebbaren Schwachstellen
     unterscheiden.
--   unterschiedliche Base-Images vergleichen.
+-   erklären, warum alte Base-Images ein Sicherheitsrisiko darstellen
+    können.
 -   nach möglichen Secrets in Images suchen.
 -   Trivy über Exit-Codes in eine CI/CD-Pipeline integrieren.
 -   erklären, warum Image-Scanning Teil der Container Supply Chain sein
@@ -22,25 +24,72 @@ Nach dem Lab können die Teilnehmer:
 
 ------------------------------------------------------------------------
 
-## 1. Trivy installieren
+## 1. Docker installieren
 
-Auf dem Ubuntu-/Debian-Lab-System:
+Für die Erstellung des Demo-Images benötigen Sie Docker.
+
+Installieren Sie Docker auf dem Ubuntu-/Debian-Lab-System:
+
+``` bash
+sudo apt-get update
+sudo apt-get install -y docker.io
+sudo systemctl enable --now docker
+```
+
+Prüfen Sie anschließend den Status:
+
+``` bash
+sudo systemctl status docker --no-pager
+```
+
+Prüfen Sie die Docker-Version:
+
+``` bash
+sudo docker version
+```
+
+Testen Sie die Installation:
+
+``` bash
+sudo docker run --rm hello-world
+```
+
+> In diesem Lab werden Docker-Befehle mit `sudo` ausgeführt. Dadurch ist
+> keine Änderung der Gruppenmitgliedschaft erforderlich.
+
+------------------------------------------------------------------------
+
+## 2. Trivy installieren
+
+Installieren Sie zunächst die benötigten Pakete:
 
 ``` bash
 sudo apt-get install -y wget gnupg
+```
 
+Importieren Sie den Schlüssel des Trivy-Repositories:
+
+``` bash
 wget -qO - https://aquasecurity.github.io/trivy-repo/deb/public.key \
   | gpg --dearmor \
   | sudo tee /usr/share/keyrings/trivy.gpg > /dev/null
+```
 
+Fügen Sie das Repository hinzu:
+
+``` bash
 echo "deb [signed-by=/usr/share/keyrings/trivy.gpg] https://aquasecurity.github.io/trivy-repo/deb generic main" \
   | sudo tee /etc/apt/sources.list.d/trivy.list
+```
 
+Installieren Sie Trivy:
+
+``` bash
 sudo apt-get update
 sudo apt-get install -y trivy
 ```
 
-Installation prüfen:
+Prüfen Sie die Installation:
 
 ``` bash
 trivy --version
@@ -48,18 +97,75 @@ trivy --version
 
 ------------------------------------------------------------------------
 
-## 2. Erstes Container-Image scannen
+## 3. Ein bewusst schwaches Demo-Image erstellen
 
-Wir untersuchen zunächst ein aktuelles nginx-Image:
+Für eine reproduzierbare Demonstration erstellen Sie nun selbst ein
+Container-Image mit einem älteren Base-Image.
+
+### Arbeitsverzeichnis anlegen
 
 ``` bash
-trivy image nginx:latest
+mkdir -p ~/trivy-lab
+cd ~/trivy-lab
+```
+
+### Dockerfile per Copy & Paste erzeugen
+
+Führen Sie den folgenden Block vollständig aus:
+
+``` bash
+cat > Dockerfile <<'EOF'
+FROM debian:10
+
+RUN apt-get update && \
+    apt-get install -y \
+      curl \
+      wget \
+      openssl \
+      ca-certificates && \
+    rm -rf /var/lib/apt/lists/*
+
+CMD ["sleep", "infinity"]
+EOF
+```
+
+Kontrollieren Sie den Inhalt:
+
+``` bash
+cat Dockerfile
+```
+
+### Image bauen
+
+``` bash
+sudo docker build -t vulnerable-demo:1.0 .
+```
+
+Prüfen Sie, ob das Image vorhanden ist:
+
+``` bash
+sudo docker images vulnerable-demo
+```
+
+> **Hinweis:** Das Image ist ausschließlich für das Security-Lab
+> vorgesehen und sollte nicht produktiv eingesetzt werden. Die konkrete
+> Anzahl gefundener CVEs kann sich mit dem Stand der
+> Vulnerability-Datenbank verändern.
+
+------------------------------------------------------------------------
+
+## 4. Erstes Container-Image scannen
+
+Untersuchen Sie das gerade erzeugte Image:
+
+``` bash
+trivy image vulnerable-demo:1.0
 ```
 
 Beim ersten Aufruf lädt Trivy die benötigte Vulnerability-Datenbank
 herunter.
 
-Achte in der Ausgabe insbesondere auf:
+Achten Sie in der Ausgabe insbesondere auf:
 
 -   `Library`
 -   `Vulnerability`
@@ -78,102 +184,163 @@ LOW
 
 ### Aufgabe
 
-Wie viele Schwachstellen findet Trivy?
+Ermitteln Sie:
 
-Welche davon sind als **HIGH** oder **CRITICAL** eingestuft?
+1.  Wie viele Schwachstellen findet Trivy insgesamt?
+2.  Wie viele davon sind als **HIGH** eingestuft?
+3.  Wie viele davon sind als **CRITICAL** eingestuft?
+4.  Für welche Findings wird eine `Fixed Version` angegeben?
 
 ------------------------------------------------------------------------
 
-## 3. Nur HIGH und CRITICAL anzeigen
+## 5. Nur HIGH und CRITICAL anzeigen
 
-Filtere die Ausgabe:
+Reduzieren Sie die Ausgabe auf besonders relevante Schweregrade:
 
 ``` bash
 trivy image \
   --severity HIGH,CRITICAL \
-  nginx:latest
+  vulnerable-demo:1.0
 ```
 
 ### Diskussionsfrage
 
-Würdest du das Image aufgrund dieser Ausgabe produktiv einsetzen?
+Würden allein die Anzahl und der Schweregrad der gefundenen CVEs
+ausreichen, um über einen produktiven Einsatz des Images zu entscheiden?
 
-Die Anzahl der CVEs allein reicht für diese Entscheidung nicht aus.
-Unter anderem müssen die tatsächliche Nutzung des betroffenen Pakets,
-die Ausnutzbarkeit und verfügbare Updates berücksichtigt werden.
+Berücksichtigen Sie unter anderem:
+
+-   tatsächliche Nutzung der betroffenen Komponente
+-   Ausnutzbarkeit der Schwachstelle
+-   verfügbare Updates
+-   Exposition der Anwendung
+-   mögliche kompensierende Sicherheitsmaßnahmen
 
 ------------------------------------------------------------------------
 
-## 4. Ungefixte Schwachstellen ausblenden
+## 6. Ungefixte Schwachstellen ausblenden
 
-Wir konzentrieren uns nun auf Findings, für die bereits ein Fix
+Konzentrieren Sie sich nun auf Findings, für die bereits ein Fix
 verfügbar ist:
 
 ``` bash
 trivy image \
   --severity HIGH,CRITICAL \
   --ignore-unfixed \
+  vulnerable-demo:1.0
+```
+
+### Aufgabe
+
+Vergleichen Sie die Ausgabe mit dem vorherigen Scan.
+
+Welche Findings sind verschwunden?
+
+Warum kann die Option `--ignore-unfixed` für die Priorisierung hilfreich
+sein?
+
+------------------------------------------------------------------------
+
+## 7. Vergleich mit einem aktuellen Image
+
+Scannen Sie nun zusätzlich ein aktuelles nginx-Image:
+
+``` bash
+trivy image \
+  --severity HIGH,CRITICAL \
   nginx:latest
 ```
 
+Vergleichen Sie anschließend beide Ergebnisse:
+
+``` text
+vulnerable-demo:1.0
+        │
+        │ Trivy
+        ▼
+   ältere Basis
+
+        versus
+
+nginx:latest
+        │
+        │ Trivy
+        ▼
+   aktuelle Basis
+```
+
 ### Aufgabe
 
-Vergleiche die Ausgabe mit dem vorherigen Scan.
+Vergleichen Sie:
 
-Was hat sich verändert?
+-   Anzahl der Findings
+-   HIGH-Findings
+-   CRITICAL-Findings
+-   betroffene Pakete
+-   verfügbare Fixes
+
+> **Wichtig:** Ein aktuelleres oder kleineres Image ist nicht
+> automatisch sicher. Die Ergebnisse hängen vom konkreten Inhalt des
+> Images und vom aktuellen Stand der Vulnerability-Datenbank ab.
 
 ------------------------------------------------------------------------
 
-## 5. Zwei Images vergleichen
+## 8. Image-Layer untersuchen
 
-Scanne zunächst:
+Container-Images bestehen aus mehreren Layern.
 
-``` bash
-trivy image --severity HIGH,CRITICAL nginx:latest
-```
-
-Danach:
+Zeigen Sie die Historie des Demo-Images an:
 
 ``` bash
-trivy image --severity HIGH,CRITICAL nginx:alpine
+sudo docker history vulnerable-demo:1.0
 ```
 
-### Aufgabe
+Zusätzliche Metadaten erhalten Sie mit:
 
-Vergleiche:
-
--   Anzahl der Findings
--   installierte Pakete
--   HIGH-Findings
--   CRITICAL-Findings
+``` bash
+sudo docker inspect vulnerable-demo:1.0
+```
 
 ### Hintergrund
 
-Ein Container-Image besteht unter anderem aus Base-Image,
-Betriebssystempaketen, Libraries und der eigentlichen Anwendung.
+Ein Dockerfile erzeugt schrittweise ein Image:
 
-Ein kleineres Base-Image enthält häufig weniger Komponenten und kann
-dadurch die Angriffsfläche reduzieren.
+``` text
+Base Image
+    │
+    ▼
+Layer
+    │
+    ▼
+Layer
+    │
+    ▼
+...
+    │
+    ▼
+Container Image
+```
 
-> **Achtung:** Ein kleines Image ist nicht automatisch ein sicheres
-> Image.
+Dateien, die in einem Layer gespeichert wurden, können unter Umständen
+weiterhin Bestandteil des Images sein, obwohl sie in einem späteren
+Layer gelöscht werden.
 
 ------------------------------------------------------------------------
 
-## 6. Nach Secrets suchen
+## 9. Nach Secrets suchen
 
 Trivy kann neben bekannten Schwachstellen auch nach möglichen Secrets
 suchen:
 
 ``` bash
-trivy image --scanners vuln,secret nginx:latest
+trivy image \
+  --scanners vuln,secret \
+  vulnerable-demo:1.0
 ```
 
-### Warum ist das wichtig?
+### Warum ist dies wichtig?
 
-Container-Images bestehen aus mehreren Layern.
-
-Beispiel:
+Betrachten Sie folgendes problematisches Dockerfile:
 
 ``` dockerfile
 FROM ubuntu
@@ -200,21 +367,26 @@ IMAGE
 Das spätere Löschen einer Datei entfernt deren Inhalt nicht automatisch
 aus bereits erzeugten Layern.
 
+> **Praxisregel:** Speichern Sie Secrets nicht in Container-Images und
+> nicht in Dockerfile-Layern.
+
 ------------------------------------------------------------------------
 
-## 7. Integration in eine CI/CD-Pipeline
+## 10. Integration in eine CI/CD-Pipeline
 
-Trivy kann über seinen Exit-Code signalisieren, ob bestimmte Findings
-vorhanden sind.
+Trivy kann über seinen Exit-Code signalisieren, ob Findings eines
+bestimmten Schweregrades vorhanden sind.
+
+Führen Sie aus:
 
 ``` bash
 trivy image \
   --severity CRITICAL \
   --exit-code 1 \
-  nginx:latest
+  vulnerable-demo:1.0
 ```
 
-Danach:
+Prüfen Sie unmittelbar danach den Exit-Code:
 
 ``` bash
 echo $?
@@ -227,25 +399,26 @@ Mögliche Ergebnisse:
 1 = mindestens ein entsprechendes Finding gefunden
 ```
 
-Damit kann beispielsweise eine CI/CD-Pipeline gestoppt werden.
+Damit kann beispielsweise eine CI/CD-Pipeline abhängig vom Scan-Ergebnis
+gestoppt werden.
 
-Vereinfachter Ablauf:
+Ein vereinfachter Ablauf:
 
 ``` text
-Git
- │
- ▼
+Quellcode
+    │
+    ▼
 CI/CD Pipeline
- │
- ├── Container-Image bauen
- │
- ├── Trivy Scan
- │
- ├── SBOM / weitere Prüfungen
- │
- └── Image in Registry übertragen
- │
- ▼
+    │
+    ├── Container-Image bauen
+    │
+    ├── Trivy Scan
+    │
+    ├── SBOM / weitere Prüfungen
+    │
+    └── Image in Registry übertragen
+    │
+    ▼
 Kubernetes
 ```
 
@@ -253,23 +426,26 @@ Das Image sollte möglichst **vor dem Deployment** untersucht werden.
 
 ------------------------------------------------------------------------
 
-## 8. Abschlussfragen
+## 11. Abschlussfragen
 
-Beantworte zum Abschluss folgende Fragen:
+Beantworten Sie zum Abschluss folgende Fragen:
 
 1.  Warum reicht es nicht aus, einem Container-Image aufgrund seines
     Namens oder Tags zu vertrauen?
-2.  Warum kann ein gelöschtes Secret trotzdem noch Bestandteil eines
+2.  Welche Rolle spielt das Base-Image für die Sicherheit eines
+    Containers?
+3.  Warum kann ein gelöschtes Secret trotzdem noch Bestandteil eines
     Images sein?
-3.  Was ist der Unterschied zwischen `HIGH`/`CRITICAL` und
-    `--ignore-unfixed`?
-4.  Warum eignet sich `--exit-code 1` für CI/CD-Pipelines?
-5.  An welcher Stelle der Container Supply Chain sollte ein Image-Scan
+4.  Was bewirkt `--ignore-unfixed`?
+5.  Warum eignet sich `--exit-code 1` für CI/CD-Pipelines?
+6.  An welcher Stelle der Container Supply Chain sollte ein Image-Scan
     durchgeführt werden?
+7.  Warum bedeutet ein kleineres Container-Image nicht automatisch, dass
+    es sicher ist?
 
 ------------------------------------------------------------------------
 
-## Optional: Weiterführender Kubernetes-Bezug
+## 12. Optional: Kubernetes-Bezug
 
 Image-Scanning ist nur ein Bestandteil der Container-Sicherheit.
 
@@ -295,12 +471,15 @@ Admission / Kyverno
 Pod
 ```
 
-Mögliche Policies können beispielsweise festlegen, aus welchen
-Registries Images bezogen werden dürfen oder welche Anforderungen Images
-und Workloads erfüllen müssen.
+Policies können beispielsweise festlegen:
+
+-   aus welchen Registries Images bezogen werden dürfen,
+-   welche Security-Einstellungen Workloads erfüllen müssen,
+-   ob bestimmte Image-Eigenschaften vorgeschrieben sind.
 
 ------------------------------------------------------------------------
 
-## Referenz
+## Referenzen
 
-Trivy-Dokumentation: https://trivy.dev/
+-   Trivy: https://trivy.dev/
+-   Docker: https://docs.docker.com/
