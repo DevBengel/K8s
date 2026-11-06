@@ -1619,7 +1619,7 @@ kubectl delete deploy lab5-ghcr-demo -n kyverno-lab --ignore-not-found
 - Unterschied **Digest ≠ Vertrauen** verstehen
 - Warum Signaturen meist **außerhalb** des Clusters geprüft werden
 - Wie Kyverno als **Governance Gate** für geprüfte Artefakte eingesetzt wird
-- Warum stabile Kurse keine Runtime-Tool-Demos benötigen
+
 
 ---
 
